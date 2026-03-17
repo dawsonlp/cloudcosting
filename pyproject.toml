@@ -1,6 +1,6 @@
 [project]
 name = "cloudcosting"
-version = "0.1.0"
+version = "1.0.0"
 description = "Multi-cloud infrastructure cost estimation tool"
 authors = [{name = "Development Team"}]
 readme = "README.md"

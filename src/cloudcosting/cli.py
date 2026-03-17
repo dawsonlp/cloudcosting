@@ -134,7 +134,14 @@ def _cmd_cache(args: list[str]):
 
 
 def _print_help():
-    print(f"""cloudcosting {__version__} - Multi-cloud infrastructure cost estimation
+    print(f"""cloudcosting {__version__} -- Multi-cloud infrastructure cost estimation
+
+Fetches real-time pricing from cloud provider APIs (AWS Pricing API),
+caches results locally, and produces structured YAML/JSON cost breakdowns
+from a simple resource configuration file.
+
+Output is designed for use with docsmith (https://pypi.org/project/docsmith/)
+to generate professional Word documents from YAML cost estimates.
 
 Usage:
   cloudcosting estimate <config.yaml> [--format yaml|json] [-o output_file]
@@ -144,12 +151,50 @@ Usage:
   cloudcosting --help
 
 Commands:
-  estimate    Run cost estimation from a YAML configuration file
-  cache       Manage the pricing data cache
+  estimate    Estimate costs from a YAML configuration file.
+              Reads resource definitions, fetches current pricing from
+              the cloud provider API (with local caching), and outputs
+              a structured cost breakdown.
+
+  cache       Manage the local pricing data cache.
+    refresh   Clear cached pricing data (optionally for one provider).
+    status    Show cache directory location and entry count.
+
+Options:
+  --format    Output format: yaml (default) or json.
+  -o FILE     Write output to FILE instead of stdout.
+
+Supported Providers:
+  aws         EC2, RDS, NAT Gateway, ALB, EBS, S3
+
+Workflow:
+  1. Write a YAML config defining your cloud resources
+  2. Run: cloudcosting estimate config.yaml -o estimate.yaml
+  3. Use docsmith to build a formatted report:
+     docsmith build estimate.yaml -o report.docx
+
+Example Config (infrastructure.yaml):
+  provider: aws
+  region: us-east-1
+  resources:
+    - type: ec2
+      label: Web Servers
+      instance_type: t3.micro
+      count: 3
+    - type: rds
+      label: Primary Database
+      engine: postgres
+      instance_class: db.r6g.xlarge
+      storage_gb: 250
 
 Examples:
   cloudcosting estimate infrastructure.yaml
   cloudcosting estimate infrastructure.yaml --format json
   cloudcosting estimate infrastructure.yaml -o costs.yaml
   cloudcosting cache refresh aws
-  cloudcosting cache status""")
+  cloudcosting cache status
+
+Links:
+  PyPI:   https://pypi.org/project/cloudcosting/
+  Repo:   https://github.com/dawsonlp/cloudcosting
+  Issues: https://github.com/dawsonlp/cloudcosting/issues""")
