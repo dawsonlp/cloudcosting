@@ -1,7 +1,5 @@
 """RDS cost calculator."""
 
-from __future__ import annotations
-
 from cloudcosting.domain import CostLineItem, ResourceCost
 
 HOURS_PER_MONTH = 730

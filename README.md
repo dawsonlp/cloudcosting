@@ -23,6 +23,7 @@ Config YAML -> Config Loader -> Estimator -> Provider Registry -> AWS Provider
 | Cache | `cache.py` | File-based pricing cache with TTL |
 | Estimator | `estimator.py` | Transaction script: config -> providers -> aggregate |
 | Provider | `providers/aws/` | AWS-specific pricing adapter and calculators |
+| Formatters | `formatters.py` | Output format transformations (docsmith) |
 | CLI | `cli.py` | Command-line interface |
 
 ### Supported AWS Resource Types
@@ -36,7 +37,17 @@ Config YAML -> Config Loader -> Estimator -> Provider Registry -> AWS Provider
 | `ebs` | EBS Volumes | `size_gb` |
 | `s3` | S3 Storage | `size_gb` |
 
-## Setup
+## Installation
+
+```bash
+pipx install cloudcosting
+```
+
+This makes the `cloudcosting` command available globally.
+
+### Development Setup
+
+For contributing or local development:
 
 ```bash
 cd cloudcosting
@@ -48,19 +59,35 @@ uv pip install -e ".[dev]"
 ## Usage
 
 ```bash
-# Run estimation
-python -m cloudcosting estimate config.yaml
+# Run estimation (YAML output)
+cloudcosting estimate config.yaml
 
 # Output as JSON
-python -m cloudcosting estimate config.yaml --format json
+cloudcosting estimate config.yaml --format json
+
+# Output as docsmith-compatible YAML (for Word document generation)
+cloudcosting estimate config.yaml --format docsmith -o estimate.yaml
+
+# Pipe directly to docsmith for Word document
+cloudcosting estimate config.yaml --format docsmith | docsmith -
 
 # Write to file
-python -m cloudcosting estimate config.yaml -o costs.yaml
+cloudcosting estimate config.yaml -o costs.yaml
 
 # Cache management
-python -m cloudcosting cache status
-python -m cloudcosting cache refresh aws
+cloudcosting cache status
+cloudcosting cache refresh aws
 ```
+
+All commands can also be run via `python -m cloudcosting` instead of the `cloudcosting` script (e.g., `python -m cloudcosting estimate config.yaml`).
+
+### Output Formats
+
+| Format | Flag | Description |
+|--------|------|-------------|
+| `yaml` | `--format yaml` (default) | Structured estimate with full metadata |
+| `json` | `--format json` | Same structure as YAML, serialized as JSON |
+| `docsmith` | `--format docsmith` | [docsmith](https://pypi.org/project/docsmith/)-compatible YAML for Word document generation |
 
 ### Example Config
 
@@ -103,14 +130,14 @@ resources:
 
 ```bash
 # Run all tests
-python -m pytest tests/ -v
+pytest tests/ -v
 
 # Run specific test module
-python -m pytest tests/unit/test_domain.py -v
-python -m pytest tests/unit/providers/aws/test_rds.py -v
+pytest tests/unit/test_domain.py -v
+pytest tests/unit/providers/aws/test_rds.py -v
 
 # Run with coverage
-python -m pytest tests/ -v --tb=short
+pytest tests/ -v --tb=short
 ```
 
 52 unit tests covering domain invariants, config validation, cache behavior, calculator arithmetic, and full estimation pipeline.

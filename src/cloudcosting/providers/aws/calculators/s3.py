@@ -1,7 +1,5 @@
 """S3 Storage cost calculator."""
 
-from __future__ import annotations
-
 from cloudcosting.domain import CostLineItem, ResourceCost
 
 S3_PRICES = {

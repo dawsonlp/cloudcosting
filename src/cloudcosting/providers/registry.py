@@ -1,7 +1,5 @@
 """Provider Registry: maps provider IDs to provider instances."""
 
-from __future__ import annotations
-
 from cloudcosting.cache import PriceCache
 from cloudcosting.providers.aws.provider import AwsProvider
 

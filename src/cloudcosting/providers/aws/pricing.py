@@ -4,8 +4,6 @@ Fetches prices from the AWS Pricing API via boto3 and uses the shared Price Cach
 All API response parsing is encapsulated here -- calculators never see raw responses.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from typing import Protocol

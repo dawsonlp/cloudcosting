@@ -3,8 +3,6 @@
 Load config -> group resources by provider/region -> estimate -> aggregate -> return Estimate.
 """
 
-from __future__ import annotations
-
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path

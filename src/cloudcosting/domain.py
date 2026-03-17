@@ -4,8 +4,6 @@ All data flowing through the system is represented here.
 No component defines its own ad-hoc dictionaries for passing data.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 
 # -- Exceptions --

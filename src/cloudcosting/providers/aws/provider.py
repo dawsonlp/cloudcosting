@@ -1,7 +1,5 @@
 """AWS Provider: orchestrates calculators for AWS resources."""
 
-from __future__ import annotations
-
 import logging
 from datetime import date
 

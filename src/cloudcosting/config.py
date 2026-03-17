@@ -3,8 +3,6 @@
 Validates structural requirements only. Provider-specific fields pass through.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import yaml

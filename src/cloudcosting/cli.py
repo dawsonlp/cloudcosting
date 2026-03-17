@@ -1,7 +1,5 @@
 """CLI entry point for cloudcosting."""
 
-from __future__ import annotations
-
 import json
 import sys
 from pathlib import Path
@@ -41,7 +39,7 @@ def _cmd_estimate(args: list[str]):
     """Run cost estimation from a config file."""
     if not args:
         print(
-            "Usage: cloudcosting estimate <config.yaml> [--format yaml|json] [-o output] [--profile name]",
+            "Usage: cloudcosting estimate <config.yaml> [--format yaml|json|docsmith] [-o output] [--profile name]",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -70,7 +68,13 @@ def _cmd_estimate(args: list[str]):
         from cloudcosting.estimator import run_estimation
 
         estimate = run_estimation(config_path, profile=profile)
-        result = estimate.to_dict()
+
+        if output_format == "docsmith":
+            from cloudcosting.formatters import to_docsmith
+
+            result = to_docsmith(estimate)
+        else:
+            result = estimate.to_dict()
 
         if output_format == "json":
             output = json.dumps(result, indent=2)
@@ -83,23 +87,27 @@ def _cmd_estimate(args: list[str]):
         else:
             print(output)
 
-        # Print summary to stderr
-        totals = result["estimate"]["totals"]
-        status = result["estimate"]["status"]
-        n_resources = sum(len(p["resources"]) for p in result["estimate"]["providers"])
-        n_errors = len(result["estimate"]["errors"]) + sum(
-            len(p.get("errors", [])) for p in result["estimate"]["providers"]
+        # Print summary to stderr (uses domain object, not serialized dict)
+        n_resources = sum(len(pe.resources) for pe in estimate.providers)
+        n_errors = len(estimate.errors) + sum(
+            len(pe.errors) for pe in estimate.providers
         )
 
         print("\n--- Summary ---", file=sys.stderr)
-        print(f"Status: {status}", file=sys.stderr)
+        print(f"Status: {estimate.status}", file=sys.stderr)
         print(f"Resources estimated: {n_resources}", file=sys.stderr)
         if n_errors > 0:
             print(f"Errors: {n_errors}", file=sys.stderr)
-        print(f"Monthly total: ${totals['monthly']:,.2f}", file=sys.stderr)
-        print(f"Annual total:  ${totals['annual']:,.2f}", file=sys.stderr)
+        print(
+            f"Monthly total: ${estimate.totals.get('monthly', 0.0):,.2f}",
+            file=sys.stderr,
+        )
+        print(
+            f"Annual total:  ${estimate.totals.get('annual', 0.0):,.2f}",
+            file=sys.stderr,
+        )
 
-        sys.exit(0 if status == "complete" else 1)
+        sys.exit(0 if estimate.status == "complete" else 1)
 
     except CloudCostError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -148,7 +156,7 @@ Output is designed for use with docsmith (https://pypi.org/project/docsmith/)
 to generate professional Word documents from YAML cost estimates.
 
 Usage:
-  cloudcosting estimate <config.yaml> [--format yaml|json] [-o output_file] [--profile name]
+  cloudcosting estimate <config.yaml> [--format yaml|json|docsmith] [-o output_file] [--profile name]
   cloudcosting cache refresh [provider]
   cloudcosting cache status
   cloudcosting --version
@@ -165,7 +173,7 @@ Commands:
     status    Show cache directory location and entry count.
 
 Options:
-  --format      Output format: yaml (default) or json.
+  --format      Output format: yaml (default), json, or docsmith.
   -o FILE       Write output to FILE instead of stdout.
   --profile NAME  AWS/cloud credentials profile to use. Overrides the
                   'profile' field in the YAML config file. If neither is
@@ -177,9 +185,9 @@ Supported Providers:
 
 Workflow:
   1. Write a YAML config defining your cloud resources
-  2. Run: cloudcosting estimate config.yaml -o estimate.yaml
-  3. Use docsmith to build a formatted report:
-     docsmith build estimate.yaml -o report.docx
+  2. Run: cloudcosting estimate config.yaml --format docsmith -o estimate.yaml
+  3. Use docsmith to build a formatted Word document:
+     docsmith estimate.yaml
 
 Example Config (infrastructure.yaml):
   provider: aws
@@ -204,6 +212,8 @@ Profile Resolution (highest to lowest priority):
 Examples:
   cloudcosting estimate infrastructure.yaml
   cloudcosting estimate infrastructure.yaml --format json
+  cloudcosting estimate infrastructure.yaml --format docsmith -o estimate.yaml
+  cloudcosting estimate infrastructure.yaml --format docsmith | docsmith -
   cloudcosting estimate infrastructure.yaml -o costs.yaml
   cloudcosting estimate infrastructure.yaml --profile production
   cloudcosting cache refresh aws

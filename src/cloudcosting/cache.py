@@ -3,8 +3,6 @@
 Provider-agnostic cache that stores keyed pricing data as JSON files.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 import time
