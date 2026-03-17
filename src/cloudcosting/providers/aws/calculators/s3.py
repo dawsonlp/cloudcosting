@@ -11,6 +11,25 @@ S3_PRICES = {
     "DEEP_ARCHIVE": 0.00099,
 }
 
+# Map user-facing storage class names to AWS Pricing API filter values
+S3_API_FILTERS = {
+    "STANDARD": {"storageClass": "General Purpose", "volumeType": "Standard"},
+    "STANDARD_IA": {
+        "storageClass": "Infrequent Access",
+        "volumeType": "Standard - Infrequent Access",
+    },
+    "ONEZONE_IA": {
+        "storageClass": "Infrequent Access",
+        "volumeType": "One Zone - Infrequent Access",
+    },
+    "GLACIER": {"storageClass": "Archive", "volumeType": "Amazon Glacier"},
+    "DEEP_ARCHIVE": {"storageClass": "Archive", "volumeType": "Glacier Deep Archive"},
+    "GLACIER_IR": {
+        "storageClass": "Archive Instant Retrieval",
+        "volumeType": "Glacier Instant Retrieval",
+    },
+}
+
 
 def validate(params: dict) -> list[str]:
     errors = []
@@ -23,10 +42,14 @@ def estimate(params: dict, pricing_adapter, region: str, label: str) -> Resource
     storage_class = params.get("storage_class", "STANDARD")
     size_gb = int(params["size_gb"])
 
+    api_filters = S3_API_FILTERS.get(
+        storage_class, {"storageClass": "General Purpose", "volumeType": "Standard"}
+    )
+
     try:
         data = pricing_adapter.get_price(
             service_code="AmazonS3",
-            filters={"productFamily": "Storage", "storageClass": storage_class},
+            filters={"productFamily": "Storage", **api_filters},
             region=region,
         )
         per_gb = _extract_gb_month(data) or S3_PRICES.get(storage_class, 0.023)

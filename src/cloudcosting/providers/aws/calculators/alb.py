@@ -17,10 +17,10 @@ def estimate(params: dict, pricing_adapter, region: str, label: str) -> Resource
 
     try:
         data = pricing_adapter.get_price(
-            service_code="ElasticLoadBalancing",
+            service_code="AWSELB",
             filters={
-                "productFamily": "Load Balancer-Application",
                 "usagetype": "LoadBalancerUsage",
+                "groupDescription": "LoadBalancer hourly usage by Application Load Balancer",
             },
             region=region,
         )
