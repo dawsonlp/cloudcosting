@@ -1,0 +1,405 @@
+title: Cloud Cost Estimator -- Architectural Design
+subtitle: Component boundaries, interfaces, and constraints
+status: "Draft v2 -- updated per senior engineer review"
+
+content:
+  - heading: 1. Overview
+    level: 1
+
+  - text: >
+      The Cloud Cost Estimator is a CLI tool that reads an infrastructure
+      configuration, fetches current pricing from cloud provider APIs,
+      calculates costs, and outputs structured data. This document defines
+      the component boundaries, their interfaces, and the constraints that
+      govern how they interact. It does not prescribe implementation details
+      -- engineers choose how to build each component within these boundaries.
+
+  - heading: 2. Component Architecture
+    level: 1
+
+  - text: >
+      The system consists of five components. Each has a single
+      responsibility and communicates with others through defined interfaces.
+      No component knows the internal workings of another.
+
+  - table:
+      headers: [Component, Responsibility, Depends On]
+      rows:
+        - [CLI, "Parse arguments, orchestrate workflow, write output", "Config Loader, Estimator"]
+        - [Config Loader, "Read YAML and validate structure", "None"]
+        - [Estimator, "Coordinate providers and aggregate results", "Provider Registry"]
+        - [Provider Registry, "Map provider identifiers to provider implementations", "Provider implementations"]
+        - [Price Cache, "Store and retrieve cached pricing data", "None (shared infrastructure)"]
+
+  - text: >
+      Note: Pricing API access is the responsibility of each provider
+      implementation, not a standalone component. Providers fetch their own
+      prices from their own APIs and use the shared Price Cache for storage.
+
+  - heading: 2.1 Data Flow
+    level: 2
+
+  - text: >
+      The data flows in a single direction through the system. There are
+      no callbacks, no circular dependencies, and no bidirectional
+      communication between components.
+
+  - numbered:
+      - "CLI receives a YAML file path and output options from the user"
+      - "Config Loader reads the YAML file and returns a structurally validated configuration"
+      - "CLI passes the configuration to the Estimator"
+      - "Estimator groups resources by provider and delegates to the appropriate provider via the Provider Registry"
+      - "Each provider validates its own resource specifications"
+      - "Each provider's resource calculators fetch pricing through the provider's own pricing adapter, which reads from and writes to the shared Price Cache"
+      - "Resource calculators return cost breakdowns (or errors) to the Estimator"
+      - "Estimator aggregates all results, including partial failures, and returns a complete estimate structure"
+      - "CLI serializes the estimate to YAML or JSON and writes it to the output destination"
+
+  - heading: 3. Component Interfaces
+    level: 1
+
+  - heading: 3.1 Config Loader Interface
+    level: 2
+
+  - text: >
+      The Config Loader accepts a file path and returns a structurally
+      validated configuration. It is responsible for structural validation
+      only -- it does not know provider-specific schemas.
+
+  - text: "**Input:** File path to a YAML configuration file."
+
+  - text: "**Output:** A configuration structure containing:"
+
+  - bullets:
+      - "A list of resource specifications, each with provider, region, type, and provider-specific parameters (passed through without validation)"
+      - "Global defaults (if any are defined in the configuration)"
+
+  - text: "**Validation scope (Config Loader):**"
+
+  - bullets:
+      - "Valid YAML syntax"
+      - "Required common fields present on each resource (provider, region, type)"
+      - "Provider identifier is recognized (registered in the Provider Registry)"
+
+  - text: "**NOT validated by Config Loader:**"
+
+  - bullets:
+      - "Provider-specific fields (instance class, engine, storage type, etc.)"
+      - "Valid combinations of provider-specific parameters"
+      - "Region validity for a specific provider"
+
+  - text: >
+      Provider-specific validation is delegated to the provider during
+      estimation. Each provider validates its own resource specifications
+      before calculating costs.
+
+  - text: "**Error behavior:** Raises a validation error with a clear message if the configuration is structurally malformed or missing required common fields."
+
+  - heading: 3.2 Provider Registry Interface
+    level: 2
+
+  - text: >
+      The Provider Registry maps provider identifiers (aws, azure, gcp)
+      to provider implementations. It is the only component that knows
+      which providers exist.
+
+  - text: "**Operations:**"
+
+  - bullets:
+      - "Lookup: Given a provider identifier, return the provider implementation"
+      - "List: Return all registered provider identifiers"
+
+  - text: >
+      Providers register themselves with the registry. Adding a new provider
+      means creating the provider implementation and adding a registration
+      entry. No other component changes.
+
+  - heading: 3.3 Provider Interface
+    level: 2
+
+  - text: >
+      Each provider exposes the same interface. This is the contract that
+      all provider implementations must satisfy. The Estimator interacts
+      with providers exclusively through this interface.
+
+  - text: "**Operations:**"
+
+  - bullets:
+      - "Supported resource types: Return a list of resource type identifiers this provider can estimate"
+      - "Estimate resource: Given a resource specification and a Price Cache, validate the specification and return a cost breakdown or an error"
+
+  - text: "**A provider implementation contains:**"
+
+  - bullets:
+      - "A pricing adapter that knows how to fetch prices from this provider's API and interact with the shared Price Cache"
+      - "A set of resource calculators, one per resource type"
+      - "Resource type registration (mapping resource type identifiers to calculators)"
+      - "Provider-specific field validation logic"
+
+  - text: >
+      The provider delegates to the appropriate resource calculator based
+      on the resource type. If the resource type is not supported, the
+      provider returns an unsupported-resource indicator (not an error).
+      If provider-specific validation fails, the provider returns a
+      validation error for that resource.
+
+  - heading: 3.4 Resource Calculator Interface
+    level: 2
+
+  - text: >
+      Each resource calculator handles one resource type for one provider.
+      It understands the pricing model for that specific resource type and
+      knows what pricing information to request from the provider's pricing
+      adapter.
+
+  - text: "**Input:**"
+
+  - bullets:
+      - "Resource specification (type, provider-specific parameters)"
+      - "The provider's pricing adapter (for fetching unit prices)"
+
+  - text: "**Output:** A cost breakdown containing:"
+
+  - bullets:
+      - "Label (from the resource specification, or auto-generated)"
+      - "Resource type"
+      - "Monthly total cost"
+      - "Annual total cost"
+      - "Line items (named cost components with individual amounts)"
+      - "Notes (assumptions, caveats)"
+
+  - text: "**Error output:** If the calculator cannot produce a cost, it returns an error containing:"
+
+  - bullets:
+      - "The resource label and type"
+      - "A clear reason for the failure"
+
+  - heading: 3.5 Price Cache Interface
+    level: 2
+
+  - text: >
+      The Price Cache is shared infrastructure that stores and retrieves
+      pricing data. It is provider-agnostic -- it stores keyed data
+      regardless of which provider produced it. Providers' pricing adapters
+      use the cache to avoid repeated API calls.
+
+  - text: "**Contract:**"
+
+  - bullets:
+      - "Store: Accept pricing data with a cache key and store it"
+      - "Retrieve: Given a cache key, return the cached data if it exists and has not expired"
+      - "Expiry: Entries expire after a configurable TTL (default 24 hours)"
+      - "Refresh: Support forced invalidation, scoped by provider"
+      - "Status: Report whether a retrieval was a cache hit or miss, and the age of cached data"
+
+  - text: "**Cache key granularity:** Per-query. Each distinct pricing lookup is cached independently. This allows fine-grained cache behavior without forcing providers to refetch all pricing when only one resource type's data is stale."
+
+  - text: "**Cache refresh scope:** Provider-scoped. A refresh invalidates all cached entries for a given provider. Global refresh (all providers) is also supported."
+
+  - text: "**Offline behavior:** If the provider's pricing adapter cannot reach its API, it must check the Price Cache for expired (stale) data. If stale data exists, use it and include a staleness warning in the output. If no cached data exists at all, the resource fails with an error."
+
+  - heading: 3.6 Estimator Interface
+    level: 2
+
+  - text: >
+      The Estimator is the orchestration component. It takes a validated
+      configuration, delegates to providers, and assembles the final result.
+      It contains no pricing knowledge and no provider-specific logic.
+
+  - text: "**Input:** Structurally validated configuration from Config Loader, plus a Price Cache instance."
+
+  - text: "**Output:** A complete estimate structure containing:"
+
+  - bullets:
+      - "Per-provider sections, each with its own metadata (region, pricing date, currency, cache status)"
+      - "Per-resource cost breakdowns within each provider section"
+      - "Global aggregate totals (monthly, annual) across all providers"
+      - "Warnings and errors (unsupported resources, failed resources, stale cache, validation failures)"
+
+  - heading: 3.7 Error Aggregation Model
+    level: 2
+
+  - text: >
+      The system supports partial success. When some resources succeed and
+      others fail, the output includes all available information. The system
+      never silently drops a failed resource.
+
+  - text: "**Rules:**"
+
+  - bullets:
+      - "Successful resources appear in the cost breakdown as normal"
+      - "Failed resources (pricing errors, validation errors, unsupported types) appear in a dedicated errors section with the resource label and reason"
+      - "Totals reflect only successful resources"
+      - "The output includes a clear indicator of whether the estimate is complete or partial"
+      - "A configuration with zero successful resources still produces output (with errors only, no totals)"
+
+  - heading: 3.8 Output Structure
+    level: 2
+
+  - text: >
+      The output is organized by provider to reflect the reality that
+      different providers operate in different regions, with different
+      pricing dates, and potentially different currencies.
+
+  - text: "**Top-level structure:**"
+
+  - bullets:
+      - "Global metadata (tool version, estimation timestamp, complete/partial indicator)"
+      - "Per-provider sections, each containing: provider identifier, region, pricing date, currency, cache status, and resource cost breakdowns"
+      - "Global totals (monthly, annual) summing across all providers"
+      - "Errors section listing all failed resources with reasons"
+      - "Warnings section listing non-fatal issues (stale cache, assumptions made)"
+
+  - text: >
+      The CLI is responsible for serializing this structure to the
+      requested format (YAML or JSON) and writing it to the output
+      destination (stdout or file). This is a thin operation -- the estimate
+      structure is designed to serialize naturally to both formats without
+      transformation.
+
+  - heading: 4. Provider Extensibility
+    level: 1
+
+  - text: >
+      Adding a new cloud provider requires these steps and ONLY these steps:
+
+  - numbered:
+      - "Create a new provider module that implements the Provider Interface"
+      - "Implement a pricing adapter that fetches from this provider's pricing API and uses the shared Price Cache"
+      - "Implement resource calculators for each supported resource type"
+      - "Register the provider with the Provider Registry"
+
+  - text: "**No changes to any of these components:**"
+
+  - bullets:
+      - "CLI"
+      - "Config Loader"
+      - "Estimator"
+      - "Price Cache"
+      - "Output serialization"
+      - "Existing provider implementations"
+
+  - heading: 5. Resource Type Extensibility
+    level: 1
+
+  - text: >
+      Adding a new resource type to an existing provider requires these
+      steps and ONLY these steps:
+
+  - numbered:
+      - "Create a new resource calculator that implements the Resource Calculator Interface"
+      - "Register it with the provider's resource type registry"
+
+  - text: "**No changes to any of these components:**"
+
+  - bullets:
+      - "Other resource calculators"
+      - "The provider's pricing adapter"
+      - "The provider's core logic"
+      - "The Estimator"
+      - "The CLI or output format"
+
+  - heading: 6. Constraints
+    level: 1
+
+  - heading: 6.1 Separation of Concerns
+    level: 2
+
+  - table:
+      headers: [Rule, Rationale]
+      rows:
+        - ["No display logic anywhere in the system", "Output is structured data. Formatting is the consumer's responsibility."]
+        - ["No provider-specific logic in the Estimator", "The Estimator orchestrates; providers calculate."]
+        - ["No pricing API calls outside of provider pricing adapters", "Each provider owns its own API interaction."]
+        - ["No caching logic in resource calculators", "Caching is the Price Cache's responsibility; pricing adapters mediate access."]
+        - ["Config Loader validates structure only", "Provider-specific validation belongs to the provider."]
+
+  - heading: 6.2 Data Constraints
+    level: 2
+
+  - bullets:
+      - "All monetary values are in the currency determined by the provider's pricing API for the given region"
+      - "Monthly costs assume 730 hours (365.25 days / 12 months * 24 hours)"
+      - "Annual costs are monthly * 12"
+      - "All costs are on-demand pricing unless explicitly noted otherwise"
+      - "The output structure must serialize cleanly to both YAML and JSON without transformation"
+      - "Global totals assume a single currency; if providers return different currencies, totals are per-currency"
+
+  - heading: 6.3 API Constraints
+    level: 2
+
+  - bullets:
+      - "The tool uses read-only API access only -- no ability to create, modify, or delete cloud resources"
+      - "Standard credential mechanisms are used for each provider (no custom credential management)"
+      - "API rate limits must be respected; the Price Cache is the primary mitigation"
+
+  - heading: "7. Decision: Scenario Comparison"
+    level: 1
+
+  - text: >
+      The requirements document raised the question of whether scenario
+      comparison should be built into the tool or handled externally.
+
+  - text: "**Architectural decision: External comparison.**"
+
+  - text: >
+      The tool estimates one configuration and outputs one result. Comparing
+      scenarios is done by running the tool multiple times with different
+      configuration files and comparing the structured outputs. This keeps
+      the tool simple and composable. A separate comparison script can diff
+      two YAML outputs trivially.
+
+  - text: "**Rationale:**"
+
+  - bullets:
+      - "Keeps the tool's scope narrow (KISS, YAGNI)"
+      - "Avoids complexity in configuration format (no scenario nesting)"
+      - "External comparison is trivial with structured output"
+      - "A comparison utility can be added later without modifying the core tool"
+
+  - heading: 8. Component Diagram
+    level: 1
+
+  - text: >
+      User invokes CLI with a YAML configuration file. CLI delegates to
+      Config Loader for structural validation, then to Estimator for cost
+      calculation. Estimator uses Provider Registry to find the right
+      provider, which validates provider-specific fields and delegates to
+      Resource Calculators. Resource Calculators request pricing through
+      the provider's pricing adapter, which checks the shared Price Cache
+      first, then the cloud API if needed. Results (successes and failures)
+      flow back up through the Estimator to CLI, which serializes to
+      YAML/JSON.
+
+  - table:
+      headers: [Layer, Components, Direction]
+      rows:
+        - [Entry, "CLI, Config Loader", "User input flows in, structured output flows out"]
+        - [Orchestration, Estimator, "Configuration flows in, estimate (with errors) flows out"]
+        - [Provider, "Provider Registry, Provider implementations (pricing adapters + resource calculators)", "Resource specs flow in, cost breakdowns or errors flow out"]
+        - [Infrastructure, "Price Cache", "Cache queries flow in, cached pricing data flows out"]
+        - [External, "AWS Pricing API, Azure Retail Prices API, GCP Cloud Billing API", "API requests flow out, pricing data flows in"]
+
+  - heading: 9. Trade-offs
+    level: 1
+
+  - table:
+      headers: [Decision, Chosen, Alternative, Why]
+      rows:
+        - ["One provider per resource", "Yes, each resource belongs to exactly one provider", "Allow cross-provider resources", "Simplicity; cross-provider comparisons are done at the configuration level"]
+        - ["Flat resource list", "Resources are a flat list with provider tags", "Nested by provider", "Simpler config format; grouping is a display concern"]
+        - ["External comparison", "Run tool twice and diff", "Built-in scenario comparison", "KISS; comparison is trivial with structured output"]
+        - ["Pricing adapters inside providers", "Each provider owns its API interaction", "Unified pricing abstraction", "Provider pricing APIs are too different to abstract meaningfully"]
+        - ["Shared Price Cache", "One cache used by all providers", "Per-provider caches", "Simpler infrastructure; cache keys include provider so there is no collision"]
+        - ["Sync interface", "All operations are synchronous", "Async for parallel API calls", "CLI tool with caching; parallel calls are premature optimization"]
+        - ["Partial success", "Include successful resources even if others fail", "All-or-nothing estimation", "More useful output; errors are reported honestly"]
+        - ["Per-provider output sections", "Metadata grouped by provider", "Single flat metadata block", "Different providers have different regions, dates, currencies"]
+
+  - heading: "10. Review History"
+    level: 1
+
+  - table:
+      headers: [Version, Date, Changes]
+      rows:
+        - ["v1", "2026-03-16", "Initial design"]
+        - ["v2", "2026-03-16", "Restructured Pricing Client into Price Cache (shared) + pricing adapters (per-provider). Clarified Config Loader validates structure only. Added error aggregation model (partial success). Clarified multi-provider output structure. Added cache granularity decision. Rewrote Section 3.5 to remove parameter prescriptions."]

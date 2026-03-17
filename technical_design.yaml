@@ -1,0 +1,688 @@
+title: Cloud Cost Estimator -- Technical Design
+subtitle: Implementation blueprint for the cloudcosting project
+status: Draft -- awaiting review
+
+content:
+  - heading: 1. Overview
+    level: 1
+
+  - text: >
+      This document bridges the architectural design to implementation.
+      It describes how the five architectural components (CLI, Config Loader,
+      Estimator, Provider Registry, Price Cache) will be realized in Python
+      3.13+, including library choices, data structures, project layout,
+      error handling, and testing strategy. The implementing engineer retains
+      authority over final coding decisions within these constraints.
+
+  - heading: 2. Technology Stack
+    level: 1
+
+  - table:
+      headers: [Concern, Choice, Rationale]
+      rows:
+        - [Language, "Python 3.13+", "Per standards; team expertise"]
+        - [Build backend, hatchling (PEP 621), "Standard, lightweight, consistent with other projects"]
+        - [CLI framework, argparse (stdlib), "Simple CLI with few commands; no external dependency needed"]
+        - [YAML parsing, PyYAML, "Mature, well-known; already used in other projects"]
+        - [AWS pricing, boto3, "Official AWS SDK; only way to access the Pricing API"]
+        - [Cache storage, "Filesystem (JSON files)", "No database dependency; portable; inspectable; trivial to implement"]
+        - [Output serialization, "PyYAML + json (stdlib)", "YAML and JSON output with zero extra dependencies"]
+        - [Testing, "pytest + hypothesis", "Per standards; property tests for cost calculations"]
+        - [Type checking, mypy (pragmatic mode), "Public interfaces typed; internal helpers optional"]
+        - [Linting/formatting, "ruff + black", "Per standards"]
+
+  - heading: 3. Project Layout
+    level: 1
+
+  - text: "Standard src/ layout per Python development guidelines:"
+
+  - text: |
+      cloudcosting/
+        src/
+          cloudcosting/
+            __init__.py
+            __main__.py
+            cli.py
+            config.py
+            estimator.py
+            registry.py
+            cache.py
+            domain.py
+            providers/
+              __init__.py
+              aws/
+                __init__.py
+                provider.py
+                pricing.py
+                calculators/
+                  __init__.py
+                  rds.py
+                  ec2.py
+                  nat_gateway.py
+                  alb.py
+                  ebs.py
+                  s3.py
+        tests/
+          unit/
+            test_config.py
+            test_estimator.py
+            test_cache.py
+            test_domain.py
+            providers/
+              aws/
+                test_rds.py
+                test_ec2.py
+                test_nat_gateway.py
+                test_alb.py
+                test_ebs.py
+                test_s3.py
+          integration/
+            test_aws_pricing.py
+        pyproject.toml
+        README.md
+
+  - heading: 3.1 Module Responsibilities
+    level: 2
+
+  - table:
+      headers: [Module, Architectural Component, Responsibility]
+      rows:
+        - [cli.py, CLI, "Parse arguments, wire components, serialize output"]
+        - [config.py, Config Loader, "Load YAML, validate structure, return configuration"]
+        - [estimator.py, Estimator, "Group by provider, delegate, aggregate results"]
+        - [registry.py, Provider Registry, "Map provider IDs to provider instances"]
+        - [cache.py, Price Cache, "File-based key-value cache with TTL"]
+        - [domain.py, "(shared)", "Data classes for cost breakdowns, errors, estimates"]
+        - [providers/aws/provider.py, AWS Provider, "Implements Provider interface for AWS"]
+        - [providers/aws/pricing.py, AWS Pricing Adapter, "Fetches AWS prices via boto3, uses Price Cache"]
+        - [providers/aws/calculators/*.py, Resource Calculators, "One module per AWS resource type"]
+
+  - heading: 4. Domain Objects
+    level: 1
+
+  - text: >
+      All data flowing through the system is represented by immutable
+      dataclasses defined in domain.py. These are the shared vocabulary
+      between components. No component defines its own ad-hoc dictionaries
+      for passing data.
+
+  - heading: 4.1 Input Domain
+    level: 2
+
+  - text: >
+      ResourceSpec represents a single resource from the configuration.
+      The params field is an untyped dictionary containing provider-specific
+      parameters -- Config Loader passes these through without validation.
+
+  - text: >
+      EstimationConfig holds the full parsed configuration: a list of
+      ResourceSpecs plus any global defaults.
+
+  - heading: 4.2 Output Domain
+    level: 2
+
+  - text: >
+      CostLineItem represents one cost component (e.g., "instance",
+      "storage", "backup") with a name and monthly amount.
+
+  - text: >
+      ResourceCost represents the full cost breakdown for one resource:
+      label, type, monthly total, annual total, line items, and notes.
+
+  - text: >
+      ResourceError represents a failed resource: label, type, and
+      reason string.
+
+  - text: >
+      ProviderEstimate groups results for one provider: provider ID,
+      region, pricing date, currency, cache status, list of ResourceCosts,
+      and list of ResourceErrors.
+
+  - text: >
+      Estimate is the top-level output: tool version, timestamp,
+      complete/partial indicator, list of ProviderEstimates, global totals,
+      and global warnings.
+
+  - text: >
+      All domain objects serialize to dictionaries via a to_dict() method
+      that produces YAML/JSON-friendly output. No custom serializers needed.
+
+  - heading: 5. Component Implementation Details
+    level: 1
+
+  - heading: 5.1 Config Loader (config.py)
+    level: 2
+
+  - text: >
+      Loads YAML with yaml.safe_load(). Validates structural requirements:
+      top-level must have a 'resources' key containing a list. Each resource
+      must have 'provider', 'region', and 'type' as strings. All other
+      fields are passed through as the params dict.
+
+  - text: >
+      The Config Loader receives a reference to the Provider Registry to
+      validate that provider identifiers are recognized. This is the only
+      coupling between Config Loader and the registry -- it does not import
+      or know about any specific provider.
+
+  - text: >
+      Returns an EstimationConfig dataclass. Raises ConfigError (a custom
+      exception defined in domain.py) with a human-readable message on
+      any validation failure.
+
+  - heading: 5.2 Provider Registry (registry.py)
+    level: 2
+
+  - text: >
+      A simple dictionary mapping string identifiers to provider instances.
+      Providers are registered at application startup in cli.py. No
+      plugin discovery, no dynamic loading, no metaclass magic. Just a dict
+      populated explicitly.
+
+  - text: >
+      Adding a new provider means: import it in cli.py, add one line to
+      register it. This is deliberately simple -- plugin infrastructure
+      can be added later if the number of providers justifies it.
+
+  - heading: 5.3 Price Cache (cache.py)
+    level: 2
+
+  - text: >
+      File-based cache stored in a configurable directory (default:
+      ~/.cloudcosting/cache/). Each cache entry is a JSON file named by a
+      hash of the cache key. The cache key is a tuple of (provider, region,
+      service, query_attributes) serialized deterministically.
+
+  - text: "**Cache entry structure (JSON file):**"
+
+  - bullets:
+      - "provider: string"
+      - "key: the original cache key for debugging"
+      - "data: the cached pricing response (provider-specific)"
+      - "timestamp: ISO 8601 when the entry was written"
+      - "ttl_seconds: the TTL at time of writing"
+
+  - text: >
+      Retrieval checks timestamp + TTL against current time. If expired
+      but data exists, the cache can return stale data with a staleness
+      indicator (for offline/fallback scenarios). The pricing adapter
+      decides whether to use stale data or refetch.
+
+  - text: >
+      Provider-scoped refresh deletes all cache files whose provider field
+      matches. Global refresh deletes the entire cache directory contents.
+
+  - text: >
+      No locking, no concurrent access protection. This is a CLI tool
+      run by one user at a time. If concurrent access becomes a need,
+      that is a future concern.
+
+  - heading: 5.4 Estimator (estimator.py)
+    level: 2
+
+  - text: >
+      Pure orchestration. Groups ResourceSpecs by provider identifier.
+      For each provider group, looks up the provider in the registry,
+      calls the provider's estimate method for each resource, and collects
+      results (ResourceCost or ResourceError).
+
+  - text: >
+      After all providers have been called, the Estimator assembles the
+      Estimate output: builds ProviderEstimate objects, calculates global
+      totals (sum of all successful monthly/annual costs), determines
+      complete/partial status, and collects all warnings.
+
+  - text: >
+      The Estimator never catches exceptions from providers silently.
+      If a provider raises an unexpected exception (not a domain error),
+      the Estimator wraps it as a ResourceError with the exception message
+      and continues processing other resources.
+
+  - heading: 5.5 AWS Provider (providers/aws/)
+    level: 2
+
+  - text: "**provider.py** implements the Provider interface:"
+
+  - bullets:
+      - "Maintains a dictionary of resource type identifiers to calculator instances"
+      - "Validates provider-specific fields by delegating to the calculator's validate method before estimate"
+      - "Creates the AWS pricing adapter and passes it to calculators"
+
+  - text: "**pricing.py** is the AWS pricing adapter:"
+
+  - bullets:
+      - "Uses boto3's pricing client (service endpoint in us-east-1, which is the only region with the full Pricing API)"
+      - "Translates resource attributes into GetProducts filter parameters"
+      - "Parses the verbose JSON response to extract unit prices"
+      - "Reads from and writes to the shared Price Cache"
+      - "Handles boto3 exceptions: on API failure, attempts cache fallback with staleness warning"
+
+  - text: "**Key implementation note on AWS Pricing API:**"
+
+  - text: >
+      The AWS Pricing API returns deeply nested JSON with string-encoded
+      price lists. The pricing adapter must handle this complexity and
+      expose a simple interface to calculators: "give me the hourly price
+      for this instance type with these attributes." All API response
+      parsing is encapsulated in pricing.py -- calculators never see raw
+      API responses.
+
+  - heading: 5.6 Resource Calculators (providers/aws/calculators/)
+    level: 2
+
+  - text: >
+      Each calculator is a module with two functions: validate (checks
+      required parameters, returns errors) and estimate (calculates costs
+      using the pricing adapter, returns ResourceCost).
+
+  - text: "**RDS calculator (rds.py) parameters:**"
+
+  - bullets:
+      - "engine (required): postgres, mysql, sqlserver-se, sqlserver-ee, etc."
+      - "instance_class (required): db.r6g.xlarge, etc."
+      - "storage_gb (required): integer"
+      - "multi_az (optional, default false): boolean"
+      - "backup_retention_days (optional, default 7): integer"
+      - "storage_type (optional, default gp3): gp3, io1, etc."
+
+  - text: "**RDS cost components:**"
+
+  - bullets:
+      - "Instance: hourly price * 730 hours (doubled if Multi-AZ)"
+      - "Storage: per-GB-month price * storage_gb"
+      - "Backup: per-GB-month price * storage_gb * (retention_days > free tier adjustment)"
+
+  - text: "**EC2 calculator (ec2.py) parameters:**"
+
+  - bullets:
+      - "instance_type (required): t3.micro, m6g.xlarge, etc."
+      - "count (optional, default 1): integer"
+
+  - text: "**NAT Gateway calculator (nat_gateway.py) parameters:**"
+
+  - bullets:
+      - "count (optional, default 1): integer"
+      - "Note: Fixed hourly cost only. Data transfer costs are excluded with a note."
+
+  - text: "**ALB calculator (alb.py) parameters:**"
+
+  - bullets:
+      - "count (optional, default 1): integer"
+      - "Note: Fixed hourly cost only. LCU costs are excluded with a note."
+
+  - text: "**EBS calculator (ebs.py) parameters:**"
+
+  - bullets:
+      - "volume_type (optional, default gp3): gp3, gp2, io1, io2, st1, sc1"
+      - "size_gb (required): integer"
+      - "count (optional, default 1): integer"
+
+  - text: "**S3 calculator (s3.py) parameters:**"
+
+  - bullets:
+      - "storage_class (optional, default STANDARD): STANDARD, STANDARD_IA, GLACIER, etc."
+      - "size_gb (required): integer"
+      - "Note: Storage cost only. Request and transfer costs excluded with a note."
+
+  - heading: 6. CLI Design (cli.py)
+    level: 1
+
+  - text: "**Commands:**"
+
+  - text: >
+      The CLI has one primary command: estimate. Additional commands may
+      be added later (e.g., cache management).
+
+  - text: "**Usage:**"
+
+  - bullets:
+      - "python -m cloudcosting estimate config.yaml -- Estimate to stdout (YAML)"
+      - "python -m cloudcosting estimate config.yaml --format json -- Estimate to stdout (JSON)"
+      - "python -m cloudcosting estimate config.yaml -o costs.yaml -- Estimate to file"
+      - "python -m cloudcosting estimate config.yaml --refresh -- Force cache refresh before estimating"
+      - "python -m cloudcosting estimate config.yaml --refresh-provider aws -- Refresh only AWS cache"
+      - "python -m cloudcosting estimate config.yaml --cache-dir /path/to/cache -- Custom cache directory"
+
+  - text: "**Startup wiring:**"
+
+  - text: >
+      cli.py is responsible for constructing all components and wiring
+      them together: create the Price Cache, create provider instances
+      (each receiving the Price Cache), register providers in the registry,
+      create the Config Loader (receiving the registry for provider ID
+      validation), create the Estimator (receiving the registry), and
+      invoke the estimation.
+
+  - text: "**Output:**"
+
+  - text: >
+      The Estimate dataclass's to_dict() produces the output structure.
+      CLI serializes it with yaml.dump() or json.dumps() depending on
+      the --format flag. Exit code 0 for complete success, exit code 0
+      for partial success (warnings on stderr), exit code 1 for total
+      failure (all resources failed or config error).
+
+  - heading: 7. Input Configuration Format
+    level: 1
+
+  - text: "**Example configuration file:**"
+
+  - text: |
+      provider: aws
+      region: us-east-1
+
+      resources:
+        - type: rds
+          engine: postgres
+          instance_class: db.r6g.xlarge
+          storage_gb: 250
+          multi_az: true
+          backup_retention_days: 35
+          label: "Primary PostgreSQL"
+
+        - type: rds
+          engine: sqlserver-se
+          instance_class: db.r6i.xlarge
+          storage_gb: 250
+          multi_az: true
+          label: "SQL Server Alternative"
+
+        - type: ec2
+          instance_type: t3.micro
+          count: 1
+          label: "Bastion Host"
+
+        - type: nat_gateway
+          count: 3
+
+        - type: alb
+          count: 1
+
+        - type: ebs
+          volume_type: gp3
+          size_gb: 100
+          count: 3
+
+        - type: s3
+          size_gb: 500
+          label: "Document Storage"
+
+  - text: >
+      When provider and region appear at the top level, they apply as
+      defaults to all resources. Resources can override either field
+      individually. This avoids repeating provider/region on every resource
+      in single-provider configurations.
+
+  - text: "**Multi-provider configuration:**"
+
+  - text: |
+      resources:
+        - type: rds
+          provider: aws
+          region: us-east-1
+          engine: postgres
+          instance_class: db.r6g.xlarge
+          storage_gb: 250
+          label: "AWS PostgreSQL"
+
+        - type: managed_database
+          provider: azure
+          region: eastus
+          engine: postgres
+          sku: GP_Gen5_4
+          storage_gb: 250
+          label: "Azure PostgreSQL"
+
+  - heading: 8. Output Structure
+    level: 1
+
+  - text: "**Example YAML output:**"
+
+  - text: |
+      estimate:
+        version: "0.1.0"
+        timestamp: "2026-03-16T10:30:00Z"
+        status: complete
+
+        providers:
+          - provider: aws
+            region: us-east-1
+            pricing_date: "2026-03-16"
+            currency: USD
+            cache_status: fresh
+            resources:
+              - label: "Primary PostgreSQL"
+                type: rds
+                monthly: 809.00
+                annual: 9708.00
+                line_items:
+                  - name: instance
+                    monthly: 760.00
+                  - name: storage
+                    monthly: 29.00
+                  - name: backup
+                    monthly: 20.00
+                notes:
+                  - "Multi-AZ: instance cost doubled"
+                  - "Storage type: gp3"
+              - label: "Bastion Host"
+                type: ec2
+                monthly: 7.59
+                annual: 91.08
+                line_items:
+                  - name: instance
+                    monthly: 7.59
+
+        totals:
+          monthly: 1245.59
+          annual: 14947.08
+
+        errors: []
+        warnings: []
+
+  - heading: 9. Error Handling Strategy
+    level: 1
+
+  - heading: 9.1 Exception Hierarchy
+    level: 2
+
+  - text: "All custom exceptions inherit from a base CloudCostError:"
+
+  - bullets:
+      - "ConfigError: Configuration file is malformed or missing required fields"
+      - "ProviderError: Provider-specific validation failure"
+      - "PricingError: Unable to fetch or parse pricing data"
+      - "CacheError: Cache read/write failure (filesystem issues)"
+
+  - text: >
+      Domain errors (ConfigError, ProviderError, PricingError) are expected
+      conditions handled gracefully. CacheError is logged and the system
+      operates without cache. Unexpected exceptions are caught at the
+      Estimator level and wrapped as ResourceErrors.
+
+  - heading: 9.2 Error Flow
+    level: 2
+
+  - bullets:
+      - "ConfigError: Raised by Config Loader, caught by CLI, printed to stderr, exit 1"
+      - "ProviderError: Raised by provider validation, caught by Estimator, becomes ResourceError in output"
+      - "PricingError: Raised by pricing adapter, caught by calculator or Estimator, becomes ResourceError in output"
+      - "CacheError: Logged as warning, estimation continues without cache"
+      - "Unexpected exceptions: Caught by Estimator, wrapped as ResourceError with traceback in debug mode"
+
+  - heading: 10. Testing Strategy
+    level: 1
+
+  - heading: 10.1 Test Priorities
+    level: 2
+
+  - text: >
+      Testing effort is concentrated where risk lives, per our testing
+      philosophy. Cost calculations involve money -- errors have real
+      consequences for budgeting decisions.
+
+  - table:
+      headers: [Risk Area, Test Type, Priority]
+      rows:
+        - ["Cost calculation correctness", "Unit (domain)", "Highest -- property tests for conservation and monotonicity"]
+        - ["AWS Pricing API parsing", "Integration", "High -- API response format changes break everything"]
+        - ["Config validation", "Unit", "Medium -- clear error messages for bad configs"]
+        - ["Cache behavior (TTL, staleness)", "Unit", "Medium -- correctness of cache expiry logic"]
+        - ["Estimator aggregation", "Unit", "Medium -- totals, partial success, error collection"]
+        - ["CLI argument parsing", "Unit", "Low -- argparse handles most of this"]
+        - ["Output serialization", "Unit", "Low -- yaml.dump and json.dumps are well-tested"]
+
+  - heading: 10.2 Unit Tests (Domain and Components)
+    level: 2
+
+  - text: "**Cost calculator tests (highest priority):**"
+
+  - text: >
+      Each calculator is a pure function: given resource parameters and
+      unit prices, return a cost breakdown. Tests provide known unit prices
+      (no API calls, no mocks) and verify the calculation produces correct
+      results.
+
+  - text: "**Property tests for cost calculations:**"
+
+  - bullets:
+      - "Monotonicity: Increasing storage_gb never decreases total cost"
+      - "Monotonicity: Enabling multi_az never decreases total cost"
+      - "Conservation: Sum of line items equals monthly total"
+      - "Non-negative: No cost component is ever negative"
+      - "Scaling: count * single_resource_cost == multi_resource_cost"
+
+  - text: "**Config Loader tests:**"
+
+  - bullets:
+      - "Valid configs parse without error"
+      - "Missing required fields produce clear ConfigError messages naming the field"
+      - "Unknown provider IDs produce clear ConfigError messages"
+      - "Provider-specific fields pass through untouched"
+
+  - text: "**Cache tests:**"
+
+  - bullets:
+      - "Store then retrieve returns same data"
+      - "Expired entries are not returned as fresh"
+      - "Expired entries are returned as stale when requested"
+      - "Provider-scoped refresh removes only that provider's entries"
+      - "Global refresh removes all entries"
+
+  - text: "**Estimator tests:**"
+
+  - bullets:
+      - "Successful resources appear in output with correct totals"
+      - "Failed resources appear in errors section, not in totals"
+      - "Mixed success/failure produces partial status"
+      - "All-success produces complete status"
+      - "All-failure produces output with errors, no totals"
+
+  - heading: 10.3 Integration Tests
+    level: 2
+
+  - text: >
+      Integration tests hit the real AWS Pricing API with real credentials.
+      They are marked with @pytest.mark.integration and excluded from
+      default test runs.
+
+  - bullets:
+      - "Verify API response parsing for each resource type (the API format is the highest integration risk)"
+      - "Verify returned prices are non-zero and in a reasonable range"
+      - "Verify cache is populated after API call"
+      - "Verify stale cache fallback works when API is unreachable (simulated by invalid credentials)"
+
+  - heading: 10.4 Tests NOT Written
+    level: 2
+
+  - text: "Per our testing philosophy, these tests provide no value:"
+
+  - bullets:
+      - "Testing that dataclasses have fields"
+      - "Testing that the registry stores and retrieves (tests dict behavior)"
+      - "Testing that yaml.dump produces YAML"
+      - "Mock-heavy tests verifying call sequences between components"
+      - "Testing argparse flag parsing in isolation"
+
+  - heading: 11. Construction Order
+    level: 1
+
+  - text: "Per our standards: domain first, tests, then outward."
+
+  - numbered:
+      - "domain.py: All dataclasses (ResourceSpec, CostLineItem, ResourceCost, ResourceError, ProviderEstimate, Estimate, etc.) and exception hierarchy"
+      - "Domain tests: Property tests for dataclass invariants (to_dict round-trip, total == sum of line items)"
+      - "cache.py: File-based Price Cache implementation"
+      - "Cache tests: Store/retrieve/expiry/refresh behavior"
+      - "config.py: YAML loader with structural validation"
+      - "Config tests: Valid/invalid configs, passthrough of provider-specific fields"
+      - "providers/aws/pricing.py: AWS pricing adapter with cache integration"
+      - "providers/aws/calculators/rds.py: First calculator (RDS is the most complex)"
+      - "RDS calculator tests: Correctness with known prices, property tests"
+      - "Remaining AWS calculators (ec2, nat_gateway, alb, ebs, s3) with tests"
+      - "providers/aws/provider.py: AWS provider implementation wiring calculators"
+      - "estimator.py: Orchestration with aggregation and error handling"
+      - "Estimator tests: Partial success, totals, error collection"
+      - "registry.py: Provider registry (trivial, tested through estimator)"
+      - "cli.py: Argument parsing, component wiring, output serialization"
+      - "Integration tests: Real AWS API calls"
+
+  - heading: 12. Dependencies
+    level: 1
+
+  - text: "**Runtime dependencies:**"
+
+  - bullets:
+      - "pyyaml: YAML parsing and output"
+      - "boto3: AWS Pricing API access"
+
+  - text: "**Dev dependencies:**"
+
+  - bullets:
+      - "pytest: Test framework"
+      - "hypothesis: Property-based testing"
+      - "ruff: Linting and import sorting"
+      - "black: Code formatting"
+      - "mypy: Type checking"
+      - "boto3-stubs[pricing]: Type stubs for boto3 pricing client"
+
+  - text: >
+      Minimal dependency footprint. Azure and GCP providers will add their
+      respective SDK dependencies when implemented (azure-mgmt-commerce,
+      google-cloud-billing) but these are not installed until needed.
+
+  - heading: 13. Performance Considerations
+    level: 1
+
+  - bullets:
+      - "Cached estimates target under 2 seconds (per requirements). File I/O for cache + YAML parsing + cost math is well within this budget."
+      - "AWS Pricing API calls are slow (2-5 seconds per query). First run will be noticeably slower. Cache makes subsequent runs fast."
+      - "boto3 client creation has measurable overhead. One client instance is created per estimation run and reused across all resource calculators."
+      - "JSON file cache has no index -- provider-scoped refresh iterates all files. Acceptable for expected cache sizes (tens to hundreds of entries)."
+
+  - heading: 14. Future Provider Considerations
+    level: 1
+
+  - text: >
+      Azure and GCP providers are Phase 2 and Phase 3. They will follow
+      the same structure as the AWS provider: a provider module, a pricing
+      adapter for their API, and resource calculators. The core system
+      (domain, cache, estimator, registry, CLI) is designed to require
+      zero changes when adding these providers.
+
+  - text: "**Azure pricing adapter note:**"
+
+  - text: >
+      Azure Retail Prices API is a public REST API that does not require
+      authentication for read access. The pricing adapter will use httpx
+      instead of a provider-specific SDK. This is simpler but means the
+      response format and error handling will differ from AWS.
+
+  - text: "**GCP pricing adapter note:**"
+
+  - text: >
+      GCP Cloud Billing API requires a project ID and OAuth credentials.
+      The pricing adapter will use the google-cloud-billing library.
+      GCP pricing is structured differently (SKUs rather than product
+      attributes), so the calculator implementations will differ
+      significantly from AWS, but the interfaces remain the same.

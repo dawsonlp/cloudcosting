@@ -1,0 +1,26 @@
+"""Provider Registry: maps provider IDs to provider instances."""
+
+from __future__ import annotations
+
+from cloudcosting.cache import PriceCache
+from cloudcosting.providers.aws.provider import AwsProvider
+
+
+class ProviderRegistry:
+    """Registry of cost estimation providers."""
+
+    def __init__(self, cache: PriceCache):
+        self._providers = {}
+        self._cache = cache
+        self._register_defaults()
+
+    def _register_defaults(self):
+        aws = AwsProvider(cache=self._cache)
+        self._providers[aws.provider_id] = aws
+
+    def get(self, provider_id: str):
+        return self._providers.get(provider_id)
+
+    @property
+    def known_ids(self) -> set[str]:
+        return set(self._providers.keys())

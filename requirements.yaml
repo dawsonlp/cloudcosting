@@ -1,0 +1,285 @@
+title: Cloud Cost Estimator Requirements
+subtitle: Requirements for a multi-cloud infrastructure cost estimation tool
+status: Draft -- awaiting review
+
+content:
+  - heading: 1. Purpose
+    level: 1
+
+  - text: >
+      Organizations building cloud infrastructure need accurate, current cost
+      estimates to make informed decisions about provider selection, resource
+      sizing, and budgeting. This tool provides programmatic cost estimation
+      across multiple cloud providers from a single, consistent interface.
+
+  - text: >
+      The tool reads a configuration file describing desired cloud resources,
+      fetches current pricing from the provider's pricing API, calculates
+      monthly and annual costs, and outputs a structured cost breakdown. The
+      output is data, not presentation -- it is consumed by other tools
+      (document generators, dashboards, spreadsheets) for display.
+
+  - heading: 2. Scope
+    level: 1
+
+  - heading: 2.1 In Scope
+    level: 2
+
+  - bullets:
+      - "Cost estimation for cloud infrastructure resources (compute, database, networking, storage)"
+      - "Multiple cloud providers behind a common interface"
+      - "Current pricing fetched from each provider's pricing API"
+      - "Structured output (YAML, JSON) for consumption by other tools"
+      - "Scenario comparison (run multiple configurations, compare results)"
+
+  - heading: 2.2 Out of Scope
+    level: 2
+
+  - bullets:
+      - "Display or presentation formatting (handled by consuming tools such as docgen)"
+      - "Infrastructure provisioning or deployment"
+      - "Cost monitoring or billing analysis of running infrastructure"
+      - "Reserved instance or savings plan optimization recommendations"
+
+  - heading: 3. Cloud Provider Requirements
+    level: 1
+
+  - heading: 3.1 Supported Providers
+    level: 2
+
+  - text: >
+      The tool must support multiple cloud providers as interchangeable cost
+      estimation engines. Each provider is implemented independently but
+      exposes the same interface for configuration and output.
+
+  - table:
+      headers: [Provider, Priority, Pricing Source, Status]
+      rows:
+        - [Amazon Web Services (AWS), Phase 1, AWS Pricing API (boto3), First implementation]
+        - [Microsoft Azure, Phase 2, Azure Retail Prices API, Future]
+        - [Google Cloud Platform (GCP), Phase 3, GCP Cloud Billing API, Future]
+
+  - heading: 3.2 Adding New Providers
+    level: 2
+
+  - text: >
+      The architecture must allow adding a new cloud provider without
+      modifying existing provider implementations or the core estimation
+      logic. A new provider is added by implementing the provider interface
+      and registering it. No changes to the CLI, configuration loader, or
+      output formatter should be required.
+
+  - heading: 4. Input Configuration Requirements
+    level: 1
+
+  - heading: 4.1 Configuration Format
+    level: 2
+
+  - text: >
+      The tool reads a YAML configuration file describing the cloud resources
+      to be estimated. The configuration specifies the provider, region, and
+      a list of resources with their sizing parameters.
+
+  - heading: 4.2 Provider-Agnostic Fields
+    level: 2
+
+  - text: >
+      Every resource configuration must include these fields regardless of
+      provider:
+
+  - table:
+      headers: [Field, Required, Description]
+      rows:
+        - [provider, Yes, "Cloud provider identifier (aws, azure, gcp)"]
+        - [region, Yes, Provider-specific region identifier]
+        - [type, Yes, "Resource type (rds, vm, nat_gateway, load_balancer, etc.)"]
+        - [label, No, Human-readable label for the resource in output]
+
+  - heading: 4.3 Provider-Specific Fields
+    level: 2
+
+  - text: >
+      Beyond the common fields, each resource type has provider-specific
+      parameters (instance class, storage type, engine, etc.). These are
+      defined by the provider's calculator for that resource type. The tool
+      must validate that required fields are present and provide clear error
+      messages for missing or invalid parameters.
+
+  - heading: 4.4 Multi-Provider Configurations
+    level: 2
+
+  - text: >
+      A single configuration file may contain resources from multiple
+      providers. This supports scenarios where an organization uses multiple
+      clouds, or wants to compare equivalent configurations across providers.
+
+  - heading: 5. Pricing Data Requirements
+    level: 1
+
+  - heading: 5.1 Current Pricing
+    level: 2
+
+  - text: >
+      The tool must fetch current pricing from each provider's official
+      pricing API. Pricing must not be hardcoded or manually maintained.
+      The pricing date must be included in the output so consumers know
+      when the estimate was generated.
+
+  - heading: 5.2 Caching
+    level: 2
+
+  - text: >
+      Pricing API responses must be cached locally to avoid repeated API
+      calls during iterative estimation. The cache must have a configurable
+      time-to-live (default 24 hours). Users must be able to force a cache
+      refresh.
+
+  - heading: 5.3 Credentials
+    level: 2
+
+  - text: >
+      The tool must use standard credential mechanisms for each provider
+      (AWS credentials via boto3 defaults, Azure via DefaultAzureCredential,
+      GCP via Application Default Credentials). The tool requires read-only
+      pricing API permissions only -- no write access to any cloud resources.
+
+  - heading: 5.4 Offline Operation
+    level: 2
+
+  - text: >
+      If cached pricing data exists, the tool should be able to produce
+      estimates without network access (using cached data). The output must
+      clearly indicate when cached pricing is used and its age.
+
+  - heading: 6. Output Requirements
+    level: 1
+
+  - heading: 6.1 Output Format
+    level: 2
+
+  - text: >
+      The tool outputs structured data only. It does not format for human
+      display. Supported output formats:
+
+  - bullets:
+      - "YAML (default) -- human-readable structured data"
+      - "JSON -- machine-consumable structured data"
+
+  - heading: 6.2 Output Structure
+    level: 2
+
+  - text: >
+      The output must include:
+
+  - bullets:
+      - "Metadata: provider, region, pricing date, currency, cache status"
+      - "Per-resource breakdown: label, type, monthly cost, annual cost, cost components"
+      - "Totals: aggregate monthly and annual costs"
+      - "Notes: any assumptions or caveats per resource"
+
+  - heading: 6.3 Output Destination
+    level: 2
+
+  - text: >
+      Output is written to stdout by default. An optional flag writes to a
+      file. This supports piping into other tools.
+
+  - heading: 6.4 Composability with Other Tools
+    level: 2
+
+  - text: >
+      The output structure must be straightforward to transform into input
+      for document generation tools (such as docgen). A simple script or
+      template should be able to convert the cost output into a formatted
+      document section. The tool itself does not perform this conversion.
+
+  - heading: 7. Resource Type Requirements
+    level: 1
+
+  - heading: 7.1 Phase 1 Resource Types (AWS)
+    level: 2
+
+  - text: >
+      The initial implementation must support cost estimation for these
+      AWS resource types:
+
+  - table:
+      headers: [Resource Type, Key Parameters]
+      rows:
+        - [RDS (Relational Database), "Engine, instance class, storage, Multi-AZ, backup retention"]
+        - [EC2 (Compute), "Instance type, count"]
+        - [NAT Gateway, Count]
+        - [Application Load Balancer, Count]
+        - [EBS Storage, "Volume type, size"]
+        - [S3 Storage, "Storage class, estimated size"]
+
+  - heading: 7.2 Extensibility
+    level: 2
+
+  - text: >
+      Adding a new resource type to an existing provider must not require
+      modifying other resource type calculators or the core estimation logic.
+      Each resource type calculator is independent.
+
+  - heading: 8. Comparison Requirements
+    level: 1
+
+  - heading: 8.1 Scenario Comparison
+    level: 2
+
+  - text: >
+      The tool should support comparing multiple configurations
+      (e.g., different instance sizes, different providers, with/without
+      high availability). This may be achieved by running the tool multiple
+      times with different configuration files and comparing the structured
+      outputs, or by supporting multiple named scenarios within a single
+      configuration file.
+
+  - decision: >
+      Should the tool support multiple scenarios in a single configuration
+      file, or should comparison be handled externally by running the tool
+      multiple times?
+
+  - heading: 9. Error Handling Requirements
+    level: 1
+
+  - bullets:
+      - "Invalid configuration files must produce clear, actionable error messages"
+      - "Unsupported resource types must be reported without failing the entire estimate"
+      - "Pricing API failures must fall back to cached data if available, with a warning"
+      - "Missing credentials must produce a clear message indicating which provider credentials are needed"
+
+  - heading: 10. Non-Functional Requirements
+    level: 1
+
+  - heading: 10.1 Performance
+    level: 2
+
+  - bullets:
+      - "Cached estimates should complete in under 2 seconds"
+      - "Initial pricing API fetch may take longer but should provide progress indication"
+
+  - heading: 10.2 Portability
+    level: 2
+
+  - bullets:
+      - "Must run on macOS and Linux"
+      - "No cloud-provider-specific runtime requirements (runs locally, not in cloud)"
+      - "Python 3.13+"
+
+  - heading: 11. Approvals
+    level: 1
+
+  - table:
+      headers: [Stakeholder, Role, Date, Approved]
+      rows:
+        - ["", CTO, "", "[ ]"]
+        - ["", Lead Architect, "", "[ ]"]
+
+  - heading: Summary of Pending Decisions
+    level: 1
+
+  - table:
+      headers: [Decision, Section, Options, Impact]
+      rows:
+        - [Scenario comparison model, "8.1", "Multi-scenario config file vs external comparison", "Configuration complexity vs tooling simplicity"]
