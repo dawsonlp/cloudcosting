@@ -1,0 +1,342 @@
+title: Cost Comparison Document Composer -- Requirements
+subtitle: Requirements for composing multi-scenario cost comparison documents
+status: "Approved -- ready for design"
+
+content:
+  - heading: 1. Purpose
+    level: 1
+
+  - text: >
+      Decision-makers evaluating cloud infrastructure options need to
+      compare cost estimates across multiple scenarios side by side.
+      Scenarios may differ by resource sizing (small, medium, large),
+      provider choice (AWS vs Azure), region, high-availability
+      configuration, or any combination of these variables.
+
+  - text: >
+      The cloudcosting tool produces a structured cost estimate for a
+      single configuration. This is by design -- it keeps the estimation
+      tool simple and composable. However, a single estimate is rarely
+      the final deliverable. The deliverable is a comparison document
+      that helps stakeholders understand the cost implications of
+      different infrastructure choices.
+
+  - text: >
+      This tool takes multiple infrastructure configuration files,
+      estimates each one, composes the results into a single comparison
+      document formatted for docsmith, which renders it as a
+      professional Word document suitable for stakeholder review.
+
+  - heading: 2. Scope
+    level: 1
+
+  - heading: 2.1 In Scope
+    level: 2
+
+  - bullets:
+      - "Accept multiple infrastructure configuration files as input (one per scenario)"
+      - "Estimate each configuration using the existing cloudcosting estimation engine"
+      - "Align resources across scenarios for side-by-side comparison"
+      - "Produce a single docsmith-compatible YAML document as output"
+      - "Include scenario-level and resource-level cost comparisons"
+      - "Include summary totals per scenario"
+
+  - heading: 2.2 Out of Scope
+    level: 2
+
+  - bullets:
+      - "Word document rendering (docsmith handles that)"
+      - "Cost optimization recommendations"
+      - "Charting or graphical visualizations"
+      - "Interactive or web-based comparison views"
+      - "Cross-currency comparison (all scenarios in a single comparison must use the same currency)"
+      - "Computed cost differences or baseline comparisons (the document presents absolute costs; readers compare raw numbers)"
+      - "Parsing previously saved estimate output files (the tool works from configuration files directly)"
+
+  - heading: 3. User Stories
+    level: 1
+
+  - heading: 3.1 Infrastructure Sizing Comparison
+    level: 2
+
+  - text: >
+      As an infrastructure architect, I want to compare the costs of
+      small, medium, and large infrastructure configurations so that I
+      can present options to stakeholders with clear cost implications
+      for each sizing tier.
+
+  - heading: 3.2 Provider Comparison
+    level: 2
+
+  - text: >
+      As a CTO, I want to compare equivalent infrastructure across AWS
+      and Azure so that I can make an informed provider selection based
+      on cost alongside other factors.
+
+  - heading: 3.3 High Availability Cost Impact
+    level: 2
+
+  - text: >
+      As an operations lead, I want to compare a standard deployment
+      against a high-availability deployment so that I can quantify the
+      cost of redundancy for budget discussions.
+
+  - heading: 3.4 Regional Cost Comparison
+    level: 2
+
+  - text: >
+      As a compliance officer, I want to compare costs across regions
+      (e.g., us-east-1 vs eu-west-1) so that I can understand the cost
+      impact of data residency requirements.
+
+  - heading: 4. Input Requirements
+    level: 1
+
+  - heading: 4.1 Configuration Inputs
+    level: 2
+
+  - text: >
+      The tool must accept two or more infrastructure configuration
+      files as input. Each configuration file represents one scenario
+      and uses the same YAML format accepted by the existing
+      cloudcosting estimate command.
+
+  - heading: 4.2 Scenario Naming
+    level: 2
+
+  - text: >
+      Each scenario must have a human-readable name that appears in
+      the comparison document column headers. The user must be able to
+      assign names to scenarios. If no name is provided, the tool should
+      derive a reasonable default.
+
+  - heading: 4.3 Scenario Count
+    level: 2
+
+  - text: >
+      The tool must handle at least 5 scenarios cleanly. Beyond 5
+      scenarios, decision fatigue makes comparison documents less useful
+      to stakeholders. The tool should handle more than 5 gracefully
+      (with a warning) rather than refusing.
+
+  - heading: 4.4 Currency Constraint
+    level: 2
+
+  - text: >
+      All scenarios in a single comparison must use the same currency.
+      If scenarios report different currencies, the tool must produce a
+      clear error identifying the mismatch.
+
+  - heading: 4.5 Document Metadata
+    level: 2
+
+  - text: >
+      The user must be able to specify document-level metadata for the
+      comparison output:
+
+  - bullets:
+      - "Document title (e.g., 'Infrastructure Cost Comparison -- Project Phoenix')"
+      - "Subtitle (optional)"
+      - "Additional introductory text or context (optional)"
+
+  - text: >
+      If no title is provided, a sensible default should be generated.
+
+  - heading: 5. Comparison Logic Requirements
+    level: 1
+
+  - heading: 5.1 Resource Alignment
+    level: 2
+
+  - text: >
+      Resources must be identifiable as the same logical resource across
+      scenarios. The user must have a clear, predictable mechanism to
+      control which resources align. If a resource appears in one
+      scenario but not another, the comparison must show this clearly
+      rather than omitting the resource.
+
+  - heading: 5.2 Mismatched Scenarios
+    level: 2
+
+  - text: >
+      Scenarios may contain different sets of resources. The comparison
+      must handle this gracefully:
+
+  - bullets:
+      - "Resources present in all scenarios appear in a unified comparison"
+      - "Resources present in only some scenarios are included with clear indication of absence in other scenarios"
+      - "The document must note which resources differ across scenarios"
+
+  - heading: 5.3 Multi-Provider Scenarios
+    level: 2
+
+  - text: >
+      A scenario may contain resources from multiple providers (e.g., an
+      estimate that includes both AWS and Azure resources). The
+      comparison must preserve provider context (region, pricing date)
+      alongside cost figures.
+
+  - heading: 5.4 Resource Ordering
+    level: 2
+
+  - text: >
+      The ordering of resources in the comparison must be consistent and
+      predictable. If a user runs the same comparison twice with the
+      same inputs, the resources must appear in the same order. The
+      specific ordering strategy is an architectural decision.
+
+  - heading: 6. Output Requirements
+    level: 1
+
+  - heading: 6.1 Output Format
+    level: 2
+
+  - text: >
+      The tool produces a single docsmith-compatible YAML document. This
+      document, when processed by docsmith, renders as a Word document
+      with comparison tables, summaries, and supporting text.
+
+  - heading: 6.2 Information Needs
+    level: 2
+
+  - text: >
+      The comparison document must satisfy these stakeholder information
+      needs:
+
+  - heading: 6.2.1 Quick Cost Summary
+    level: 3
+
+  - text: >
+      Stakeholders must be able to see total monthly and annual costs
+      per scenario at a glance, without reading the full document. This
+      information must stand alone as a quick reference.
+
+  - heading: 6.2.2 Resource-Level Comparison
+    level: 3
+
+  - text: >
+      Stakeholders must be able to see, for each resource, what it
+      costs under each scenario. This enables identification of which
+      resources drive cost differences between scenarios.
+
+  - heading: 6.2.3 Line-Item Detail
+    level: 3
+
+  - text: >
+      Detailed line-item cost breakdowns per resource are available but
+      not included by default. The user must be able to request them.
+      This level of detail helps engineers understand what drives cost
+      differences but adds length that may not suit executive audiences.
+
+  - heading: 6.2.4 Context and Caveats
+    level: 3
+
+  - text: >
+      Any warnings, errors, or notes from the individual estimates
+      must be preserved and attributed to the correct scenario. Stale
+      cache warnings, partial estimate indicators, and pricing dates
+      must be visible so stakeholders understand the reliability of
+      the numbers.
+
+  - heading: 6.3 Output Destination
+    level: 2
+
+  - text: >
+      Output is written to stdout by default. An optional flag writes to
+      a file. This supports both direct piping to docsmith and saving
+      intermediate YAML for review.
+
+  - heading: 7. Workflow Requirements
+    level: 1
+
+  - heading: 7.1 Primary Workflow
+    level: 2
+
+  - text: >
+      The expected workflow is:
+
+  - numbered:
+      - "User creates multiple infrastructure configuration files (one per scenario)"
+      - "User runs the compare command, providing the config files and scenario names"
+      - "The tool estimates each configuration and composes a docsmith-compatible comparison document"
+      - "User runs docsmith to generate the final Word document"
+
+  - heading: 7.2 Offline and Cached Operation
+    level: 2
+
+  - text: >
+      The compare command must work without live cloud API credentials
+      if cached pricing data exists. Stakeholders frequently iterate on
+      comparison documents in environments where cloud API access is
+      unreliable (flights, meetings, offline review). If the pricing
+      cache is warm from a recent estimation run, the comparison must
+      succeed using cached data, with appropriate staleness warnings in
+      the output.
+
+  - heading: 8. Error Handling Requirements
+    level: 1
+
+  - bullets:
+      - "If a configuration file is invalid, produce a clear error identifying which file and why"
+      - "If estimation fails for a scenario, include available data and note the failure"
+      - "If scenarios have no overlapping resources (nothing to compare), warn the user but still produce output"
+      - "If fewer than two configurations are provided, produce a clear usage error"
+      - "If scenarios use different currencies, produce a clear error identifying the mismatch"
+      - "If pricing data is unavailable (no cache, no API access), produce a clear error for the affected scenario"
+
+  - heading: 9. Non-Functional Requirements
+    level: 1
+
+  - heading: 9.1 Performance
+    level: 2
+
+  - text: >
+      With cached pricing, comparison of up to 5 scenarios with 50
+      resources each should complete in under 5 seconds. Fresh pricing
+      API fetches may take longer and should provide progress indication.
+
+  - heading: 9.2 Portability
+    level: 2
+
+  - bullets:
+      - "Must run on macOS and Linux"
+      - "Python 3.13+"
+      - "No additional dependencies beyond what cloudcosting already requires"
+
+  - heading: 9.3 Distribution
+    level: 2
+
+  - text: >
+      The comparison capability must be available to anyone who has
+      installed cloudcosting, with no additional installation steps.
+
+  - heading: 10. Future Considerations
+    level: 1
+
+  - text: >
+      The following are not v1 requirements but are noted to inform
+      architectural decisions:
+
+  - bullets:
+      - "Comparing saved estimates from different time periods (e.g., this month vs last month) to track pricing changes over time"
+      - "Computed differences or percentage changes relative to a baseline scenario"
+      - "Integration with CI/CD pipelines for automated cost comparison on infrastructure changes"
+
+  - heading: 11. Approvals
+    level: 1
+
+  - table:
+      headers: [Stakeholder, Role, Date, Approved]
+      rows:
+        - ["", CTO, "2026-03-16", "[x]"]
+        - ["", Lead Architect, "2026-03-16", "[x]"]
+
+  - heading: Revision History
+    level: 1
+
+  - table:
+      headers: [Version, Date, Changes]
+      rows:
+        - ["v1", "2026-03-16", "Initial draft"]
+        - ["v2", "2026-03-16", "Revised per architect review: removed implementation prescriptions, resolved pending decisions, added currency/ordering/count constraints."]
+        - ["v3", "2026-03-16", "Architectural pivot per CTO and architect: input changed from saved estimate files to infrastructure configuration files. Removed output format parsing (sections 4.3). Workflow simplified to direct config-to-comparison. Added cached/offline operation requirement. Added future considerations section for saved-estimate comparison use case."]

@@ -1,0 +1,363 @@
+title: Cost Comparison Document Composer -- Technical Design
+subtitle: Implementation blueprint for the comparison command
+status: Draft v1
+
+content:
+  - heading: 1. Overview
+    level: 1
+
+  - text: >
+      This document describes the implementation of the cloudcosting
+      compare command, which accepts multiple infrastructure configuration
+      files, estimates each, and composes a docsmith-compatible comparison
+      document. It is based on the approved architectural design
+      (design_comparison.yaml v3) and the approved requirements
+      (requirements_comparison.yaml v3).
+
+  - heading: 1.1 Pushback on Separate CLI Command
+    level: 2
+
+  - text: >
+      The architectural design proposes a separate script entry point
+      (cloudcosting-compare). This technical design recommends against
+      that in favor of adding a compare subcommand to the existing
+      cloudcosting CLI (cloudcosting compare ...). Rationale:
+
+  - bullets:
+      - "The existing CLI already uses a subcommand pattern (estimate, cache). Adding compare is consistent."
+      - "Users install one tool and discover all capabilities through cloudcosting --help."
+      - "No additional pyproject.toml entry point. Simpler packaging."
+      - "The architect noted in the trade-offs table that this can be reconsidered. We are reconsidering it."
+
+  - text: >
+      This change does not affect the Comparison Composer, which remains
+      a pure function independent of CLI concerns.
+
+  - heading: 1.2 CLI Migration to argparse
+    level: 2
+
+  - text: >
+      The existing CLI uses hand-rolled sys.argv parsing. As part of this
+      work, the CLI will be migrated to argparse with subparsers. This is
+      a prerequisite for cleanly adding the compare subcommand and
+      provides automatic help text generation, type validation, and a
+      maintainable foundation for future commands. argparse is in the
+      standard library -- no new dependencies.
+
+  - text: >
+      The migration preserves all existing CLI behavior. All current
+      arguments, flags, defaults, and exit codes remain identical.
+
+  - heading: 2. Module Layout
+    level: 1
+
+  - text: "New and modified files:"
+
+  - table:
+      headers: [File, Status, Responsibility]
+      rows:
+        - [src/cloudcosting/cli.py, Modified, "Migrated to argparse with subparsers. Existing estimate and cache commands preserved. New compare subcommand added."]
+        - [src/cloudcosting/composer.py, New, "compose_comparison() pure function. Resource alignment and docsmith output generation."]
+        - [tests/unit/test_composer.py, New, "Unit tests for compose_comparison()."]
+        - [tests/unit/test_cli_compare.py, New, "Tests for compare subcommand argument parsing and validation."]
+
+  - text: >
+      No changes to domain.py, estimator.py, config.py, formatters.py,
+      cache.py, or any provider module.
+
+  - heading: 3. composer.py -- Comparison Composer
+    level: 1
+
+  - heading: 3.1 Public Interface
+    level: 2
+
+  - text: "The module exposes one public function:"
+
+  - text: >
+      compose_comparison(scenarios, include_detail=False, title=None,
+      subtitle=None, intro_text=None) -> dict
+
+  - text: "**Parameters:**"
+
+  - bullets:
+      - "scenarios: list[tuple[str, Estimate]] -- ordered list of (name, Estimate) pairs"
+      - "include_detail: bool -- whether to include per-resource line-item breakdowns (default False)"
+      - "title: str | None -- document title (default: 'Infrastructure Cost Comparison')"
+      - "subtitle: str | None -- document subtitle (default: None)"
+      - "intro_text: str | None -- introductory paragraph (default: None)"
+
+  - text: "**Returns:** A dict with keys title, subtitle, status, content (list of docsmith content blocks)."
+
+  - text: >
+      This function is pure. No I/O, no side effects, no imports
+      beyond the domain module. It is testable with synthetic Estimate
+      objects constructed in test fixtures.
+
+  - heading: 3.2 Resource Alignment Algorithm
+    level: 2
+
+  - text: "The alignment builds an ordered label index and a lookup matrix:"
+
+  - numbered:
+      - "Initialize an ordered dict (label -> index position) to track first-seen order."
+      - "For each scenario in input order, for each ProviderEstimate in the scenario's Estimate, for each ResourceCost: if the label is not in the ordered dict, add it at the next position."
+      - "Build a lookup: dict[str, dict[str, ResourceCost | None]] mapping label -> {scenario_name -> ResourceCost or None}."
+      - "For duplicate labels within a scenario, keep the first occurrence. Return a list of warning strings for each duplicate found."
+
+  - text: >
+      The ordered dict gives deterministic first-seen ordering. The
+      lookup matrix gives O(1) access for any (label, scenario) pair
+      when building tables.
+
+  - heading: 3.3 Docsmith Output Structure
+    level: 2
+
+  - text: "The function produces content blocks in this order:"
+
+  - numbered:
+      - "If intro_text is provided: a text block with the introductory paragraph."
+      - "Heading 'Cost Summary' (level 1), followed by a summary table."
+      - "Heading 'Resource Comparison' (level 1), followed by a resource comparison table."
+      - "If include_detail is True: heading 'Resource Details' (level 1), then for each resource label a level-2 heading, a line-item table, and notes bullets."
+      - "Heading 'Estimation Context' (level 1), followed by a metadata table and any warnings/errors bullets."
+
+  - heading: 3.3.1 Summary Table
+    level: 3
+
+  - text: "Headers: ['Metric', scenario_1_name, scenario_2_name, ...]"
+
+  - text: >
+      Two rows: 'Monthly Total' and 'Annual Total'. Cells contain
+      formatted dollar amounts from Estimate.totals.
+
+  - heading: 3.3.2 Resource Comparison Table
+    level: 3
+
+  - text: "Headers: ['Resource', scenario_1_name, scenario_2_name, ...]"
+
+  - text: >
+      One row per resource label in first-seen order. Cells contain
+      formatted monthly cost or '--' for absent resources.
+
+  - heading: 3.3.3 Resource Detail Sections
+    level: 3
+
+  - text: >
+      For each resource label, a level-2 heading with the label text,
+      then a table with headers ['Component', scenario_1_name, ...].
+      Rows are the union of all line-item names across scenarios for
+      that resource. Cells contain formatted monthly cost or '--'.
+
+  - text: >
+      If any scenario has notes for the resource, a bullets block
+      lists them as "scenario_name: note text".
+
+  - heading: 3.3.4 Context Section
+    level: 3
+
+  - text: >
+      A metadata table with headers ['Scenario', 'Provider', 'Region',
+      'Pricing Date', 'Cache', 'Status']. One row per scenario. For
+      multi-provider scenarios, list providers comma-separated.
+
+  - text: >
+      If any scenario has warnings, a bullets block prefixed with
+      scenario name. Same for errors.
+
+  - heading: 3.4 Dollar Formatting
+    level: 2
+
+  - text: >
+      A private helper function _fmt(amount) returns a string like
+      '$1,234.56'. This is the same format used in the existing
+      formatters.py to_docsmith() function. If there is a future need
+      to share this between modules, it can be extracted, but for now
+      a private function in composer.py avoids coupling.
+
+  - heading: 4. CLI Changes -- cli.py
+    level: 1
+
+  - heading: 4.1 argparse Migration
+    level: 2
+
+  - text: >
+      The existing main() function is replaced with argparse-based
+      parsing. The structure:
+
+  - bullets:
+      - "Top-level parser with --version flag."
+      - "Subparsers for estimate, cache, compare."
+      - "Each subcommand has its own argument definitions and handler function."
+
+  - text: >
+      Existing behavior is preserved exactly. The estimate subcommand
+      accepts the same arguments (config_path, --format, -o, --profile).
+      The cache subcommand accepts refresh/status with optional provider.
+
+  - heading: 4.2 Compare Subcommand Arguments
+    level: 2
+
+  - text: >
+      cloudcosting compare [-h] [--title TEXT] [--subtitle TEXT]
+      [--intro TEXT] [--detail] [-o FILE] [--profile NAME]
+      scenario [scenario ...]
+
+  - text: "**Positional argument (scenario):**"
+
+  - text: >
+      Each scenario is a string in the format name:path or just path.
+      If the colon-separated name is omitted, the filename stem (without
+      extension) is used as the scenario name. Examples:
+
+  - bullets:
+      - "'Small:configs/small.yaml' -- name is 'Small', config is configs/small.yaml"
+      - "'configs/large.yaml' -- name is 'large', config is configs/large.yaml"
+
+  - text: "**Optional arguments:**"
+
+  - bullets:
+      - "--title TEXT: Document title (default: 'Infrastructure Cost Comparison')"
+      - "--subtitle TEXT: Document subtitle"
+      - "--intro TEXT: Introductory paragraph text"
+      - "--detail: Include per-resource line-item breakdowns"
+      - "-o FILE: Write output to file instead of stdout"
+      - "--profile NAME: AWS/cloud credentials profile (applied to all scenarios)"
+
+  - heading: 4.3 Compare Handler (_cmd_compare)
+    level: 2
+
+  - text: "The handler performs these steps:"
+
+  - numbered:
+      - "Parse scenario arguments into (name, Path) pairs."
+      - "Validate: at least 2 scenarios. If not, print usage error, exit 1."
+      - "If more than 5 scenarios, print warning to stderr."
+      - "For each scenario: call run_estimation(config_path, profile=profile). Print progress to stderr (e.g., 'Estimating: Small...'). Catch CloudCostError per scenario and record as a failed scenario."
+      - "Extract all currencies from all ProviderEstimate objects across all successful estimates. If more than one distinct currency, print error to stderr listing each scenario/provider/currency, exit 1."
+      - "Build the scenarios list: [(name, Estimate), ...] for successful estimates."
+      - "Call compose_comparison(scenarios, include_detail=args.detail, title=args.title, subtitle=args.subtitle, intro_text=args.intro)."
+      - "Serialize result to YAML via yaml.dump(result, default_flow_style=False, sort_keys=False)."
+      - "Write to stdout or -o file."
+      - "Print summary to stderr: number of scenarios, total resources, any failed scenarios."
+
+  - heading: 4.4 Scenario Parsing Helper
+    level: 2
+
+  - text: >
+      A private function _parse_scenario(spec: str) -> tuple[str, Path]
+      splits on the first colon. If no colon is found, the entire string
+      is treated as a path and the stem is the name. Validates the path
+      exists and is a file.
+
+  - heading: 5. Error Handling
+    level: 1
+
+  - table:
+      headers: [Condition, Implementation, Exit Code]
+      rows:
+        - ["No subcommand or -h", "argparse handles automatically", "0"]
+        - ["Fewer than 2 scenarios", "argparse nargs='+' with manual count check", "1"]
+        - ["Scenario path does not exist", "_parse_scenario raises, caught in handler", "1"]
+        - ["Config file invalid", "run_estimation raises CloudCostError, caught per-scenario", "1 if all fail, 0 if partial"]
+        - ["Estimation fails (no pricing, no cache)", "CloudCostError caught, scenario marked failed", "0 (partial) or 1 (all fail)"]
+        - ["Currency mismatch", "Handler checks after estimation, before composition", "1"]
+        - ["More than 5 scenarios", "Warning to stderr after parsing, before estimation", "0"]
+        - ["Duplicate label in scenario", "compose_comparison returns warnings, handler prints to stderr", "0"]
+
+  - heading: 6. Testing Strategy
+    level: 1
+
+  - heading: 6.1 Composer Tests (test_composer.py)
+    level: 2
+
+  - text: >
+      The Comparison Composer is a pure function operating on domain
+      objects. All tests construct Estimate objects directly in fixtures.
+      No mocks, no I/O, no filesystem.
+
+  - text: "**Tests (one per meaningful behavior):**"
+
+  - bullets:
+      - "Two identical scenarios produce a comparison with all resources matched, no absent markers"
+      - "Scenarios with different resource sets produce absent markers ('--') for missing resources"
+      - "Resource ordering follows first-seen order across scenarios"
+      - "include_detail=True adds line-item tables and notes"
+      - "include_detail=False omits line-item sections entirely"
+      - "Custom title, subtitle, intro_text appear in output"
+      - "Default title when none provided"
+      - "Duplicate labels within a scenario: first occurrence wins, warning returned"
+      - "Multi-provider scenario: metadata table lists all providers"
+      - "Scenario with warnings/errors: attributed to correct scenario in output"
+      - "Scenario with status='partial': noted in context section"
+
+  - text: >
+      Tests assert on the structure and content of the returned dict.
+      They check that specific table headers, row counts, and cell
+      values are correct. They do not assert on the exact number of
+      content blocks (that's implementation detail).
+
+  - heading: 6.2 CLI Tests (test_cli_compare.py)
+    level: 2
+
+  - text: >
+      CLI tests validate argument parsing and validation logic.
+      Estimation is mocked at the run_estimation boundary to avoid
+      cloud API calls.
+
+  - bullets:
+      - "Scenario parsing: 'Name:path' splits correctly, bare path uses stem as name"
+      - "Fewer than 2 scenarios: exits with error"
+      - "Non-existent config file: exits with error identifying file"
+      - "Currency mismatch: exits with error listing currencies"
+      - "More than 5 scenarios: warning to stderr, continues"
+      - "Successful comparison: YAML output to stdout, summary to stderr"
+
+  - heading: 6.3 argparse Migration Tests
+    level: 2
+
+  - text: >
+      The argparse migration must preserve all existing CLI behavior.
+      Existing tests for estimate and cache commands serve as regression
+      tests. If no CLI tests exist currently, add basic smoke tests for
+      the estimate subcommand to ensure the migration doesn't break it.
+
+  - heading: 7. Construction Order
+    level: 1
+
+  - text: "Following the project rules (domain first, infrastructure last):"
+
+  - numbered:
+      - "Write composer.py with compose_comparison() -- pure function, no I/O"
+      - "Write test_composer.py -- prove all comparison behaviors"
+      - "Migrate cli.py to argparse -- preserve existing behavior"
+      - "Add compare subcommand to cli.py -- call composer.py"
+      - "Write test_cli_compare.py -- prove CLI integration"
+      - "Update pyproject.toml version"
+      - "Update README.md with compare command documentation"
+
+  - heading: 8. Performance Considerations
+    level: 1
+
+  - text: >
+      The performance target is under 5 seconds with cached pricing for
+      5 scenarios with 50 resources each. The composition itself (alignment
+      + docsmith generation) is trivial -- O(scenarios * resources) with
+      dict lookups. The bottleneck is estimation, which runs sequentially
+      (one run_estimation call per scenario). With cached pricing, each
+      estimation completes in under 1 second (existing performance), so 5
+      scenarios is approximately 5 seconds.
+
+  - text: >
+      Parallel estimation (running scenarios concurrently) is not
+      implemented in v1. The existing estimator uses synchronous boto3
+      calls, and the Price Cache uses filesystem I/O. Parallelism would
+      require thread-safety analysis of both components. This is deferred
+      unless performance testing reveals a need.
+
+  - heading: 9. Review History
+    level: 1
+
+  - table:
+      headers: [Version, Date, Changes]
+      rows:
+        - ["v1", "2026-03-16", "Initial technical design. Pushed back on separate CLI command in favor of subcommand. Recommended argparse migration. Defined composer.py interface, alignment algorithm, docsmith output structure, CLI arguments, error handling, and testing strategy."]

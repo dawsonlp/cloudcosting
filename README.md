@@ -1,6 +1,6 @@
 # cloudcosting
 
-Multi-cloud infrastructure cost estimation tool. Fetches real-time pricing from cloud provider APIs (AWS Pricing API), caches results locally, and produces structured YAML/JSON cost breakdowns.
+Multi-cloud infrastructure cost estimation tool. Fetches real-time pricing from cloud provider APIs (AWS Pricing API), caches results locally, and produces structured YAML/JSON cost breakdowns. Includes a comparison command for side-by-side multi-scenario cost analysis with docsmith-compatible output for Word document generation.
 
 ## Architecture
 
@@ -24,7 +24,8 @@ Config YAML -> Config Loader -> Estimator -> Provider Registry -> AWS Provider
 | Estimator | `estimator.py` | Transaction script: config -> providers -> aggregate |
 | Provider | `providers/aws/` | AWS-specific pricing adapter and calculators |
 | Formatters | `formatters.py` | Output format transformations (docsmith) |
-| CLI | `cli.py` | Command-line interface |
+| Composer | `composer.py` | Multi-scenario comparison document composition |
+| CLI | `cli.py` | Command-line interface (estimate, cache, compare) |
 
 ### Supported AWS Resource Types
 
@@ -58,6 +59,8 @@ uv pip install -e ".[dev]"
 
 ## Usage
 
+### Estimating Costs
+
 ```bash
 # Run estimation (YAML output)
 cloudcosting estimate config.yaml
@@ -74,12 +77,46 @@ cloudcosting estimate config.yaml --format docsmith | docsmith -
 # Write to file
 cloudcosting estimate config.yaml -o costs.yaml
 
-# Cache management
-cloudcosting cache status
-cloudcosting cache refresh aws
+# Use a specific AWS credentials profile
+cloudcosting estimate config.yaml --profile production
 ```
 
-All commands can also be run via `python -m cloudcosting` instead of the `cloudcosting` script (e.g., `python -m cloudcosting estimate config.yaml`).
+### Comparing Scenarios
+
+Compare costs across multiple infrastructure configurations. Produces a docsmith-compatible YAML document with side-by-side cost tables.
+
+```bash
+# Compare two configurations
+cloudcosting compare Small:small.yaml Large:large.yaml
+
+# With custom document title and line-item detail
+cloudcosting compare Small:small.yaml Large:large.yaml \
+  --title "Project Phoenix" --detail
+
+# Write comparison to file, then generate Word document
+cloudcosting compare Small:small.yaml Large:large.yaml -o comparison.yaml
+docsmith comparison.yaml
+
+# Bare paths (scenario names derived from filenames)
+cloudcosting compare small.yaml large.yaml
+
+# Multiple scenarios with a shared AWS profile
+cloudcosting compare Small:s.yaml Medium:m.yaml Large:l.yaml --profile production
+```
+
+Scenario specs use the format `Name:path` or just `path`. When the name is omitted, the filename stem is used (e.g., `small.yaml` becomes scenario name `small`).
+
+**Tip:** Label your resources in config files for meaningful comparisons. Resources are aligned across scenarios by their `label` field. Without labels, resources get auto-generated names like `EC2 t3.micro` which may not match as expected across different configurations.
+
+### Cache Management
+
+```bash
+cloudcosting cache status
+cloudcosting cache refresh aws
+cloudcosting cache refresh
+```
+
+All commands can also be run via `python -m cloudcosting` (e.g., `python -m cloudcosting estimate config.yaml`).
 
 ### Output Formats
 
@@ -88,6 +125,8 @@ All commands can also be run via `python -m cloudcosting` instead of the `cloudc
 | `yaml` | `--format yaml` (default) | Structured estimate with full metadata |
 | `json` | `--format json` | Same structure as YAML, serialized as JSON |
 | `docsmith` | `--format docsmith` | [docsmith](https://pypi.org/project/docsmith/)-compatible YAML for Word document generation |
+
+The `compare` command always produces docsmith-compatible YAML output.
 
 ### Example Config
 
@@ -134,13 +173,11 @@ pytest tests/ -v
 
 # Run specific test module
 pytest tests/unit/test_domain.py -v
+pytest tests/unit/test_composer.py -v
 pytest tests/unit/providers/aws/test_rds.py -v
-
-# Run with coverage
-pytest tests/ -v --tb=short
 ```
 
-52 unit tests covering domain invariants, config validation, cache behavior, calculator arithmetic, and full estimation pipeline.
+79 unit tests covering domain invariants, config validation, cache behavior, calculator arithmetic, full estimation pipeline, and comparison composition.
 
 ## Adding New Resource Types
 

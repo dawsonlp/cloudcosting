@@ -1,0 +1,289 @@
+title: Cost Comparison Document Composer -- Architectural Design
+subtitle: Component boundaries, interfaces, and constraints
+status: "Approved -- ready for technical design"
+
+content:
+  - heading: 1. Overview
+    level: 1
+
+  - text: >
+      The Cost Comparison Composer is a command within the cloudcosting
+      package that accepts multiple infrastructure configuration files,
+      estimates each one using the existing estimation engine, aligns
+      resources across scenarios, and produces a single
+      docsmith-compatible YAML document for Word document generation.
+
+  - text: >
+      This design is additive to the existing cloudcosting architecture.
+      It introduces new components that reuse the existing Config Loader,
+      Estimator, Provider Registry, and Price Cache. No existing
+      components are modified.
+
+  - heading: 2. Component Architecture
+    level: 1
+
+  - text: >
+      The composer introduces two new components. Each has a single
+      responsibility and communicates through defined interfaces.
+
+  - table:
+      headers: [Component, Responsibility, Depends On]
+      rows:
+        - [Compare CLI, "Parse arguments, run estimator per scenario, validate results, invoke composer, write output", "Config Loader, Estimator, Comparison Composer"]
+        - [Comparison Composer, "Align resources across scenarios, produce docsmith content blocks (pure function, no I/O)", "Domain objects (Estimate, ProviderEstimate, ResourceCost)"]
+
+  - heading: 2.1 Relationship to Existing Components
+    level: 2
+
+  - text: >
+      The compare command reuses the full existing estimation pipeline:
+      Config Loader for parsing YAML configs, Estimator for coordinating
+      providers, Provider Registry for provider lookup, and Price Cache
+      for cached pricing. The compare command is a new orchestrator that
+      calls the existing estimator multiple times and feeds the resulting
+      Estimate domain objects to the Comparison Composer.
+
+  - text: >
+      Offline and cached operation is inherently supported by reusing
+      the existing estimation pipeline. The Price Cache already provides
+      fallback to cached (possibly stale) pricing data when the provider
+      API is unreachable. No new caching or offline infrastructure is
+      needed for the compare command.
+
+  - text: >
+      The existing formatters.py to_docsmith() function produces a
+      single-estimate document. The Comparison Composer produces a
+      multi-scenario comparison document. These are separate functions
+      with different output structures, not a generalization of each
+      other. Shared formatting utilities (e.g., dollar formatting) are
+      an implementation decision for the engineer.
+
+  - heading: 2.2 Data Flow
+    level: 2
+
+  - numbered:
+      - "User invokes the compare command with config file paths and scenario names"
+      - "Compare CLI loads each config via the existing Config Loader"
+      - "Compare CLI runs the existing Estimator for each config, producing Estimate domain objects"
+      - "Compare CLI validates: at least 2 scenarios, all providers report the same currency, warns if more than 5 scenarios"
+      - "Compare CLI passes the list of named scenarios and options to the Comparison Composer"
+      - "Comparison Composer aligns resources, builds docsmith content blocks, returns a docsmith document dict"
+      - "Compare CLI serializes the dict to YAML and writes to stdout or file"
+
+  - heading: 3. Component Interfaces
+    level: 1
+
+  - heading: 3.1 Comparison Composer Interface
+    level: 2
+
+  - text: >
+      The Comparison Composer is a pure function. It takes scenario data
+      in and returns a docsmith document dict out. No I/O, no side
+      effects.
+
+  - text: "**Input:**"
+
+  - bullets:
+      - "A list of named scenarios, each containing a name (str) and an Estimate domain object"
+      - "Options: whether to include line-item detail, document title, subtitle, and introductory text"
+
+  - text: "**Output:** A dict in docsmith format (title, subtitle, status, content blocks)."
+
+  - text: "**The composer performs these steps internally:**"
+
+  - numbered:
+      - "Extract resource lists from each scenario's Estimate"
+      - "Build a union of all resource labels across scenarios, preserving first-seen order"
+      - "For each label, look up the corresponding ResourceCost in each scenario (or mark absent)"
+      - "Produce docsmith content blocks satisfying the four information needs: cost summary, resource comparison, optional detail, context and caveats"
+
+  - heading: 3.2 Compare CLI Interface
+    level: 2
+
+  - text: >
+      The Compare CLI is the orchestration entry point. It is registered
+      as an additional script in pyproject.toml, installed alongside the
+      existing cloudcosting command.
+
+  - text: "**Inputs the CLI must accept:**"
+
+  - bullets:
+      - "Two or more scenario specifications, each pairing a name with a config file path"
+      - "Document metadata: title, subtitle, introductory text (all optional)"
+      - "A toggle to include line-item detail (default: off)"
+      - "An output destination (stdout by default, optionally a file)"
+
+  - text: >
+      The specific argument syntax, flag names, and defaults are
+      implementation decisions for the engineer.
+
+  - text: >
+      The CLI should provide progress indication during estimation,
+      particularly when fresh pricing API calls are required. The form
+      of progress indication is an implementation decision.
+
+  - text: "**Validation performed by CLI:**"
+
+  - bullets:
+      - "At least 2 scenarios provided"
+      - "All config files exist and are valid (delegates to Config Loader)"
+      - "All providers across all scenarios report the same currency"
+      - "Warning to stderr if more than 5 scenarios"
+
+  - heading: 4. Resource Alignment Strategy
+    level: 1
+
+  - text: >
+      Resources are aligned across scenarios by their label field.
+      The label is user-controlled in the cloudcosting config file
+      and is the natural identifier stakeholders use when referring
+      to resources.
+
+  - text: "**Alignment rules:**"
+
+  - bullets:
+      - "Labels are matched case-sensitively and exactly. 'Primary Database' and 'primary database' are different resources."
+      - "The union of all labels across all scenarios defines the row set."
+      - "Row order is determined by first-seen order: iterate scenarios in command-line order, and for each scenario iterate resources in estimate order. A label's position is fixed when first encountered."
+      - "If a label appears in some scenarios but not others, the missing entries are clearly marked as absent (not zero-cost, not blank)."
+      - "Duplicate labels within a single scenario are not expected (cloudcosting configs use unique labels). If encountered, only the first occurrence is used and a warning is emitted."
+
+  - text: >
+      This strategy is deterministic: same inputs in the same order
+      produce the same output, satisfying the ordering requirement.
+
+  - heading: 5. Information Delivery
+    level: 1
+
+  - text: >
+      The Comparison Composer must produce docsmith content blocks that
+      satisfy four information needs identified in the requirements.
+      The specific structure, ordering, heading levels, and table column
+      names are implementation decisions.
+
+  - heading: 5.1 Cost Summary
+    level: 2
+
+  - text: >
+      Total monthly and annual costs per scenario, presented in a format
+      that stakeholders can read at a glance without reading the full
+      document.
+
+  - heading: 5.2 Resource-Level Comparison
+    level: 2
+
+  - text: >
+      Per-resource monthly costs across all scenarios, with resources
+      aligned by label. Absent resources are visually distinct from
+      zero-cost resources.
+
+  - heading: 5.3 Line-Item Detail (Optional)
+    level: 2
+
+  - text: >
+      When requested, per-resource line-item breakdowns across
+      scenarios. Notes from individual resources are preserved and
+      attributed to the correct scenario.
+
+  - heading: 5.4 Context and Caveats
+    level: 2
+
+  - text: >
+      Scenario metadata (provider, region, pricing date, cache status,
+      estimate status), warnings, and errors. All must be attributed to
+      the correct scenario.
+
+  - heading: 6. Currency Validation
+    level: 1
+
+  - text: >
+      An Estimate may contain multiple ProviderEstimate objects, each
+      with its own currency field. The currency of a scenario is
+      the set of currencies reported by its providers.
+
+  - text: "**Validation rules:**"
+
+  - bullets:
+      - "Collect all distinct currency values across all ProviderEstimate objects in all scenarios"
+      - "If exactly one distinct currency exists, proceed"
+      - "If multiple distinct currencies exist, error with a message listing each scenario and provider with its currency"
+
+  - text: >
+      This handles multi-provider scenarios naturally. A scenario with
+      AWS (USD) and Azure (USD) is fine. A comparison containing one
+      scenario in USD and another in EUR is an error.
+
+  - heading: 7. Packaging and Distribution
+    level: 1
+
+  - text: >
+      The compare command is a subcommand of the existing cloudcosting
+      CLI, consistent with the existing estimate and cache subcommands.
+      This satisfies the distribution requirement (available with no
+      additional installation) and maintains a single discoverable
+      entry point.
+
+  - text: >
+      The specific module organization is an implementation decision.
+      The architectural constraint is: the Comparison Composer must be
+      importable and testable independently of the CLI.
+
+  - heading: 8. Constraints
+    level: 1
+
+  - heading: 8.1 Separation of Concerns
+    level: 2
+
+  - table:
+      headers: [Rule, Rationale]
+      rows:
+        - ["Comparison Composer is a pure function (no I/O)", "Testable without filesystem or network; CLI handles I/O"]
+        - ["Compare CLI reuses existing Config Loader and Estimator", "No reimplementation of config parsing or estimation"]
+        - ["cli.py modified (argparse migration + compare subcommand); all other existing modules unchanged", "Compare subcommand is a natural extension of the existing CLI. argparse migration is an in-scope refactor that preserves behavior. Existing tests serve as regression validation."]
+        - ["No new domain objects for comparison", "The existing Estimate, ProviderEstimate, ResourceCost are sufficient input"]
+
+  - heading: 8.2 Data Constraints
+    level: 2
+
+  - bullets:
+      - "Absent resources are visually distinct from zero-cost resources in the output"
+      - "The output must serialize cleanly to YAML without custom representers"
+      - "Monetary formatting decisions (decimal places, separators, currency symbols) are implementation choices but must be consistent within a document"
+
+  - heading: 9. Error Handling
+    level: 1
+
+  - table:
+      headers: [Condition, Behavior, Exit Code]
+      rows:
+        - ["Fewer than 2 scenarios", "Print usage error to stderr", "1"]
+        - ["Config file not found or not readable", "Print error identifying file to stderr", "1"]
+        - ["Config file is invalid YAML or missing required fields", "Print error from Config Loader to stderr", "1"]
+        - ["Estimation fails for a scenario (pricing unavailable, no cache)", "Include partial results if possible, report failure in output", "0 (partial) or 1 (total failure)"]
+        - ["Currency mismatch across scenarios", "Print error listing currencies per scenario/provider to stderr", "1"]
+        - ["More than 5 scenarios", "Print warning to stderr, proceed normally", "0"]
+        - ["Duplicate resource label within a scenario", "Print warning to stderr, use first occurrence", "0"]
+
+  - heading: 10. Trade-offs
+    level: 1
+
+  - table:
+      headers: [Decision, Chosen, Alternative, Why]
+      rows:
+        - ["Config files as input (not saved estimates)", "Run estimator directly from configs", "Parse saved YAML/JSON estimate output", "Eliminates deserialization complexity, gives access to full domain objects, simplifies the architecture to two new components instead of three. Saved-estimate comparison is a future consideration."]
+        - ["Label-based alignment", "Match resources by label (case-sensitive, exact)", "Match by type+position, or user-supplied mapping", "Labels are user-controlled, predictable, and visible in configs. Type matching would fail when multiple resources share a type."]
+        - ["First-seen ordering", "Resources ordered by first appearance across scenarios", "Alphabetical, or ordered by cost", "Deterministic, respects user's config ordering, no surprises"]
+        - ["Subcommand (revised per technical design)", "Subcommand of existing cloudcosting CLI (cloudcosting compare)", "Separate script entry point (cloudcosting-compare)", "Senior engineer pushback accepted: existing CLI already uses subcommand pattern (estimate, cache). Single entry point is more discoverable and consistent."]
+        - ["Pure function composer", "Composer takes data in, returns dict out", "Composer writes files directly", "Testability; CLI handles I/O"]
+        - ["No new domain objects", "Reuse existing Estimate/ProviderEstimate/ResourceCost", "Create Scenario/ComparisonResult domain types", "YAGNI; the existing objects carry all needed information. New types can be introduced later if composition logic becomes complex."]
+
+  - heading: 11. Review History
+    level: 1
+
+  - table:
+      headers: [Version, Date, Changes]
+      rows:
+        - ["v1", "2026-03-16", "Initial design based on approved requirements v2"]
+        - ["v2", "2026-03-16", "Revised per senior engineer review and CTO guidance. Architectural pivot: config files as input instead of saved estimates, eliminating the Estimate Loader component. Removed implementation prescriptions: CLI syntax, module filenames, docsmith block structures. Added currency validation strategy for multi-provider scenarios. Clarified shared formatting utilities as engineer decision."]
+        - ["v3", "2026-03-16", "Approved after requirements v3 alignment review. Added offline/cached operation note (inherent via Price Cache reuse). Added progress indication guidance for CLI. Status changed to approved."]
+        - ["v4", "2026-03-16", "Accepted senior engineer pushback: compare is a subcommand of existing cloudcosting CLI, not a separate entry point. Updated trade-offs table. Design constraint 8.1 updated: cli.py is now modified (not additive-only). argparse migration accepted as in-scope refactor."]
