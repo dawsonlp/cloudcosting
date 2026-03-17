@@ -25,17 +25,28 @@ from cloudcosting.providers.registry import ProviderRegistry
 def run_estimation(
     config_path: Path,
     cache: PriceCache | None = None,
+    profile: str | None = None,
 ) -> Estimate:
     """Full estimation workflow: config -> providers -> aggregate.
 
     This is the main entry point for the estimation pipeline.
+
+    Args:
+        config_path: Path to YAML config file.
+        cache: Optional PriceCache instance (created with defaults if None).
+        profile: Optional AWS/cloud profile name. Overrides config-level profile.
     """
     if cache is None:
         cache = PriceCache()
 
-    registry = ProviderRegistry(cache=cache)
+    # Load config first (without provider validation) to extract profile
+    config = load_config(config_path)
 
-    # Load and validate config
+    # Resolve profile: CLI flag > config file > None
+    effective_profile = profile or config.profile
+
+    # Create registry with resolved profile, then re-load with provider validation
+    registry = ProviderRegistry(cache=cache, profile=effective_profile)
     config = load_config(config_path, known_providers=registry.known_ids)
 
     return estimate_from_config(config, registry)

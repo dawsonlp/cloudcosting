@@ -32,8 +32,9 @@ PROVIDER_ID = "aws"
 class AwsProvider:
     """AWS cost estimation provider."""
 
-    def __init__(self, cache: PriceCache):
+    def __init__(self, cache: PriceCache, profile: str | None = None):
         self._cache = cache
+        self._profile = profile
         self._adapters: dict[str, AwsPricingAdapter] = {}
 
     @property
@@ -46,7 +47,9 @@ class AwsProvider:
 
     def _get_adapter(self, region: str) -> AwsPricingAdapter:
         if region not in self._adapters:
-            self._adapters[region] = AwsPricingAdapter(cache=self._cache, region=region)
+            self._adapters[region] = AwsPricingAdapter(
+                cache=self._cache, region=region, profile=self._profile
+            )
         return self._adapters[region]
 
     def estimate_resources(

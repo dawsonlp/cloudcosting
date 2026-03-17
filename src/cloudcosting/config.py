@@ -49,6 +49,11 @@ def load_config(
     if "region" in raw:
         defaults["region"] = str(raw["region"])
 
+    # Extract optional profile
+    profile = None
+    if "profile" in raw:
+        profile = str(raw["profile"])
+
     # Resources list is required
     if "resources" not in raw:
         raise ConfigError("Configuration must contain a 'resources' key")
@@ -109,4 +114,6 @@ def load_config(
             )
         )
 
-    return EstimationConfig(resources=tuple(resources), defaults=defaults)
+    return EstimationConfig(
+        resources=tuple(resources), defaults=defaults, profile=profile
+    )

@@ -41,7 +41,7 @@ def _cmd_estimate(args: list[str]):
     """Run cost estimation from a config file."""
     if not args:
         print(
-            "Usage: cloudcosting estimate <config.yaml> [--format yaml|json] [-o output]",
+            "Usage: cloudcosting estimate <config.yaml> [--format yaml|json] [-o output] [--profile name]",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -49,6 +49,7 @@ def _cmd_estimate(args: list[str]):
     config_path = Path(args[0])
     output_format = "yaml"
     output_path = None
+    profile = None
 
     i = 1
     while i < len(args):
@@ -58,6 +59,9 @@ def _cmd_estimate(args: list[str]):
         elif args[i] == "-o" and i + 1 < len(args):
             output_path = Path(args[i + 1])
             i += 2
+        elif args[i] == "--profile" and i + 1 < len(args):
+            profile = args[i + 1]
+            i += 2
         else:
             print(f"Unknown option: {args[i]}", file=sys.stderr)
             sys.exit(1)
@@ -65,7 +69,7 @@ def _cmd_estimate(args: list[str]):
     try:
         from cloudcosting.estimator import run_estimation
 
-        estimate = run_estimation(config_path)
+        estimate = run_estimation(config_path, profile=profile)
         result = estimate.to_dict()
 
         if output_format == "json":
@@ -144,7 +148,7 @@ Output is designed for use with docsmith (https://pypi.org/project/docsmith/)
 to generate professional Word documents from YAML cost estimates.
 
 Usage:
-  cloudcosting estimate <config.yaml> [--format yaml|json] [-o output_file]
+  cloudcosting estimate <config.yaml> [--format yaml|json] [-o output_file] [--profile name]
   cloudcosting cache refresh [provider]
   cloudcosting cache status
   cloudcosting --version
@@ -161,8 +165,12 @@ Commands:
     status    Show cache directory location and entry count.
 
 Options:
-  --format    Output format: yaml (default) or json.
-  -o FILE     Write output to FILE instead of stdout.
+  --format      Output format: yaml (default) or json.
+  -o FILE       Write output to FILE instead of stdout.
+  --profile NAME  AWS/cloud credentials profile to use. Overrides the
+                  'profile' field in the YAML config file. If neither is
+                  set, the default credential chain is used (AWS_PROFILE
+                  env var, ~/.aws/credentials default profile, IAM role).
 
 Supported Providers:
   aws         EC2, RDS, NAT Gateway, ALB, EBS, S3
@@ -176,6 +184,7 @@ Workflow:
 Example Config (infrastructure.yaml):
   provider: aws
   region: us-east-1
+  profile: my-aws-profile        # optional: credentials profile
   resources:
     - type: ec2
       label: Web Servers
@@ -187,10 +196,16 @@ Example Config (infrastructure.yaml):
       instance_class: db.r6g.xlarge
       storage_gb: 250
 
+Profile Resolution (highest to lowest priority):
+  1. --profile flag on the command line
+  2. 'profile' field in the YAML config file
+  3. Default credential chain (AWS_PROFILE env, ~/.aws/credentials, IAM role)
+
 Examples:
   cloudcosting estimate infrastructure.yaml
   cloudcosting estimate infrastructure.yaml --format json
   cloudcosting estimate infrastructure.yaml -o costs.yaml
+  cloudcosting estimate infrastructure.yaml --profile production
   cloudcosting cache refresh aws
   cloudcosting cache status
 

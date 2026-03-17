@@ -229,3 +229,53 @@ def test_no_registry_skips_provider_validation(config_file):
     )
     cfg = load_config(path)  # no known_providers
     assert cfg.resources[0].provider == "oracle"
+
+
+# -- Profile parsing --
+
+
+def test_config_with_profile(config_file):
+    """Top-level profile field is parsed into EstimationConfig."""
+    path = config_file(
+        {
+            "provider": "aws",
+            "region": "us-east-1",
+            "profile": "production",
+            "resources": [
+                {"type": "ec2", "instance_type": "t3.micro"},
+            ],
+        }
+    )
+    cfg = load_config(path)
+    assert cfg.profile == "production"
+
+
+def test_config_without_profile_defaults_to_none(config_file):
+    """Config without profile field results in None."""
+    path = config_file(
+        {
+            "provider": "aws",
+            "region": "us-east-1",
+            "resources": [
+                {"type": "ec2", "instance_type": "t3.micro"},
+            ],
+        }
+    )
+    cfg = load_config(path)
+    assert cfg.profile is None
+
+
+def test_profile_not_passed_to_resource_params(config_file):
+    """Profile is a top-level config field, not a resource parameter."""
+    path = config_file(
+        {
+            "provider": "aws",
+            "region": "us-east-1",
+            "profile": "staging",
+            "resources": [
+                {"type": "ec2", "instance_type": "t3.micro"},
+            ],
+        }
+    )
+    cfg = load_config(path)
+    assert "profile" not in cfg.resources[0].params

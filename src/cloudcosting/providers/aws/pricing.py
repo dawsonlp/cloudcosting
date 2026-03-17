@@ -38,9 +38,10 @@ class PricingAdapter(Protocol):
 class AwsPricingAdapter:
     """Fetches AWS prices via boto3, with Price Cache integration."""
 
-    def __init__(self, cache: PriceCache, region: str):
+    def __init__(self, cache: PriceCache, region: str, profile: str | None = None):
         self._cache = cache
         self._region = region
+        self._profile = profile
         self._client = None
         self._pricing_date = ""
         self._cache_status = "unknown"
@@ -55,7 +56,8 @@ class AwsPricingAdapter:
 
     def _get_client(self):
         if self._client is None:
-            self._client = boto3.client("pricing", region_name=PRICING_REGION)
+            session = boto3.Session(profile_name=self._profile)
+            self._client = session.client("pricing", region_name=PRICING_REGION)
         return self._client
 
     def get_price(self, service_code: str, filters: dict, region: str) -> dict:

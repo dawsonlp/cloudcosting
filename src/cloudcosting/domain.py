@@ -51,6 +51,7 @@ class EstimationConfig:
 
     resources: tuple[ResourceSpec, ...]
     defaults: dict = field(default_factory=dict)
+    profile: str | None = None
 
 
 # -- Output domain --
